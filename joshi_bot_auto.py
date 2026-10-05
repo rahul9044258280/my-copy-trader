@@ -4,13 +4,12 @@ import hashlib
 import time
 import requests
 import json
-import threading
 from datetime import datetime
 
 st.set_page_config(page_title="Joshi Strangle Paper Trading Bot", layout="centered")
 
-st.title("🧪 Joshi Delta Exchange Paper Trading Bot (100% Working)")
-st.write("Ye bot testnet par market ko scan karke automatic OTM Call aur Put options execute karega.")
+st.title("⚡ Joshi Delta Exchange Paper Trading Bot (Ultra-Fast)")
+st.write("Ye bot lightning-fast speed se testnet par options scan karke orders execute karega.")
 
 # --- SIDEBAR: TESTNET API CREDENTIALS ---
 st.sidebar.header("Delta Testnet API Settings")
@@ -21,7 +20,8 @@ base_url = "https://testnet-api.delta.exchange"
 public_url = "https://api.delta.exchange"
 
 lot_size = st.sidebar.number_input("Paper Order Quantity / Lots", min_value=1, value=10, step=1)
-max_premium = st.sidebar.slider("Max Premium Limit ($)", min_value=5.0, max_value=50.0, value=20.0, step=1.0)
+# Max Premium Limit ab 100+ yani $500 tak set hai
+max_premium = st.sidebar.slider("Max Premium Limit ($)", min_value=10.0, max_value=500.0, value=100.0, step=10.0)
 
 def get_delta_signature(method, endpoint, payload_str=''):
     timestamp = str(int(time.time()))
@@ -37,7 +37,7 @@ def get_current_btc_price():
     for u in [base_url, public_url]:
         try:
             endpoint = "/v2/tickers"
-            response = requests.get(u + endpoint, timeout=5)
+            response = requests.get(u + endpoint, timeout=3)
             res_data = response.json()
             if res_data.get("success"):
                 for ticker in res_data.get('result', []):
@@ -48,65 +48,78 @@ def get_current_btc_price():
                             return val
         except:
             continue
-    return 65000.0  # Fallback default price agar API temporarily busy ho
+    return 86000.0
 
-def get_otm_option_product(option_type="C", target_premium_max=20.0):
+def get_best_options_ultra_fast(target_premium_max=100.0):
     try:
-        endpoint = "/v2/products"
-        response = requests.get(base_url + endpoint, timeout=10)
-        res_data = response.json()
-        
-        if not res_data.get("success") or not res_data.get('result'):
-            response = requests.get(public_url + endpoint, timeout=10)
-            res_data = response.json()
+        # Step 1: Ek hi call mein saare products aur tickers ek saath uthao (Super Fast)
+        prod_res = requests.get(base_url + "/v2/products", timeout=5).json()
+        if not prod_res.get("success"):
+            prod_res = requests.get(public_url + "/v2/products", timeout=5).json()
             
-        if not res_data.get("success"):
-            return None
+        tick_res = requests.get(base_url + "/v2/tickers", timeout=5).json()
+        if not tick_res.get("success"):
+            tick_res = requests.get(public_url + "/v2/tickers", timeout=5).json()
             
-        valid_options = []
-        
-        for product in res_data.get('result', []):
-            contract_type = product.get('contract_type', '')
-            symbol = product.get('symbol', '')
-            if 'call' in contract_type or 'put' in contract_type:
+        if not prod_res.get("success") or not tick_res.get("success"):
+            st.error("Market data fetch karne mein error aaya.")
+            return None, None
+
+        # Tickers ko product_id ke hisaab se map kar lo dictionary mein
+        ticker_map = {}
+        for t in tick_res.get('result', []):
+            pid = t.get('product_id')
+            if pid:
+                ticker_map[int(pid)] = float(t.get('ask', 0) or t.get('close', 0) or 0)
+
+        call_options = []
+        put_options = []
+
+        # Step 2: Local loop mein bina kisi delay ke instant filter karo
+        for product in prod_res.get('result', []):
+            contract_type = str(product.get('contract_type', '')).lower()
+            symbol = str(product.get('symbol', '')).upper()
+            prod_id = product.get('id')
+            
+            if prod_id and ('call' in contract_type or 'put' in contract_type or 'option' in contract_type):
                 if 'BTC' in symbol:
-                    is_call = 'call' in contract_type
-                    if (option_type == "C" and is_call) or (option_type == "P" and not is_call):
-                        prod_id = product.get('id')
+                    ask_price = ticker_map.get(int(prod_id), 0)
+                    if ask_price > 0:
+                        is_call = 'call' in contract_type or 'c' in symbol.split('-')[-1].lower()
+                        opt_data = {"id": prod_id, "symbol": symbol, "ask": ask_price}
                         
-                        # Ticker fetch
-                        t_res = requests.get(base_url + f"/v2/tickers?product_id={prod_id}").json()
-                        if not t_res.get('success') or not t_res.get('result'):
-                            t_res = requests.get(public_url + f"/v2/tickers?product_id={prod_id}").json()
-                            
-                        if t_res.get('success') and t_res.get('result'):
-                            t_info = t_res.get('result')[0] if isinstance(t_res.get('result'), list) else t_res.get('result')
-                            ask_price = float(t_info.get('ask', 0) or t_info.get('close', 0) or 0)
-                            
-                            if ask_price > 0:
-                                valid_options.append({
-                                    "id": prod_id,
-                                    "symbol": symbol,
-                                    "ask": ask_price
-                                })
-        
-        if not valid_options:
-            return None
-            
-        # Sabase achha (closest to target ya sabse sasta) option select karein
-        valid_options = sorted(valid_options, key=lambda x: x['ask'])
-        
-        # Pehle limit ke andar check karein
-        for opt in valid_options:
-            if opt['ask'] <= target_premium_max:
-                return opt
-                
-        # Agar koi limit ke andar na mile, toh jo sabse sasta available ho wahi utha lo taaki trade miss na ho!
-        return valid_options[0]
-        
+                        if is_call:
+                            call_options.append(opt_data)
+                        else:
+                            put_options.append(opt_data)
+
+        # Sort by price (sabase saste options pehle)
+        call_options = sorted(call_options, key=lambda x: x['ask'])
+        put_options = sorted(put_options, key=lambda x: x['ask'])
+
+        # Best Call selection (limit ke andar ya jo available ho)
+        best_call = None
+        for c in call_options:
+            if c['ask'] <= target_premium_max:
+                best_call = c
+                break
+        if not best_call and call_options:
+            best_call = call_options[0] # Fallback to cheapest available
+
+        # Best Put selection
+        best_put = None
+        for p in put_options:
+            if p['ask'] <= target_premium_max:
+                best_put = p
+                break
+        if not best_put and put_options:
+            best_put = put_options[0] # Fallback to cheapest available
+
+        return best_call, best_put
+
     except Exception as e:
-        st.error(f"Error scanning options: {e}")
-        return None
+        st.error(f"Ultra-fast scanning error: {e}")
+        return None, None
 
 def place_order(product_id, size, side):
     endpoint = "/v2/orders"
@@ -134,30 +147,32 @@ def run_strategy_cycle():
         st.warning("Kripya sidebar mein Testnet API keys enter karein.")
         return
     
-    with st.spinner("Executing 100% foolproof strategy scan..."):
-        # 1. Call Option
-        call_option = get_otm_option_product(option_type="C", target_premium_max=max_premium)
-        if call_option:
-            st.success(f"Selected Call: {call_option['symbol']} at Ask: ${call_option['ask']}")
-            res_call = place_order(call_option['id'], size=lot_size, side="buy")
+    start_time = time.time()
+    with st.spinner("⚡ Ultra-fast market scanning and order execution..."):
+        call_opt, put_opt = get_best_options_ultra_fast(target_premium_max=max_premium)
+        
+        if call_opt:
+            st.success(f"Found Call: {call_opt['symbol']} @ ${call_opt['ask']}")
+            res_call = place_order(call_opt['id'], size=lot_size, side="buy")
             st.json(res_call)
         else:
-            st.warning("Koi Call option available nahi mila.")
+            st.warning("Koi Call option nahi mila.")
             
-        # 2. Put Option
-        put_option = get_otm_option_product(option_type="P", target_premium_max=max_premium)
-        if put_option:
-            st.success(f"Selected Put: {put_option['symbol']} at Ask: ${put_option['ask']}")
-            res_put = place_order(put_option['id'], size=lot_size, side="buy")
+        if put_opt:
+            st.success(f"Found Put: {put_opt['symbol']} @ ${put_opt['ask']}")
+            res_put = place_order(put_opt['id'], size=lot_size, side="buy")
             st.json(res_put)
         else:
-            st.warning("Koi Put option available nahi mila.")
+            st.warning("Koi Put option nahi mila.")
+            
+        elapsed = time.time() - start_time
+        st.info(f"⚡ Scan & Execute completed in {elapsed:.2f} seconds!")
 
 # --- UI DISPLAY ---
 btc_price = get_current_btc_price()
 st.metric(label="Live Testnet BTC Price (USD)", value=f"${btc_price}")
 
-st.info("Bot fully active hai. Testnet par order place karne ke liye niche button dabayein.")
+st.info("Bot fully optimized hai. Instant paper trade execute karne ke liye button dabayein.")
 
-if st.button("🚀 Run Strategy 100% Now"):
+if st.button("🚀 Run Ultra-Fast Strategy Now"):
     run_strategy_cycle()
