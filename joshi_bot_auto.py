@@ -10,15 +10,15 @@ from datetime import datetime
 st.set_page_config(page_title="Joshi Strangle Paper Trading Bot", layout="centered")
 
 st.title("🧪 Joshi Delta Exchange Paper Trading Bot (Testnet)")
-st.write("Ye bot background mein automatic har 12 ghante mein Delta Testnet par virtual/paper trades execute kareगा.")
+st.write("Ye bot background mein automatic har 12 ghante mein Delta Testnet par virtual/paper trades execute karega.")
 
 # --- SIDEBAR: TESTNET API CREDENTIALS ---
 st.sidebar.header("Delta Testnet API Settings")
 api_key_input = st.sidebar.text_input("Testnet API Key", type="password")
 api_secret_input = st.sidebar.text_input("Testnet API Secret", type="password")
 
-# Updated Testnet URL for India/Global Testnet
-base_url = "https://testnet-api.india.delta.exchange"
+# Corrected Testnet URL
+base_url = "https://testnet-api.delta.exchange"
 
 lot_size = st.sidebar.number_input("Paper Order Quantity / Lots", min_value=1, value=10, step=1)
 max_premium = st.sidebar.slider("Max Premium Limit ($)", min_value=5.0, max_value=20.0, value=10.0, step=0.5)
@@ -40,7 +40,6 @@ def get_current_btc_price():
         res_data = response.json()
         if res_data.get("success"):
             for ticker in res_data.get('result', []):
-                # Delta testnet par symbol 'BTC_USDT' ya 'BTCUSD' ho sakta hai
                 if 'BTC' in ticker.get('symbol', ''):
                     return float(ticker.get('close', 0))
     except Exception as e:
@@ -114,7 +113,6 @@ def run_strategy_cycle():
         return
     
     with st.spinner("Scanning testnet market for OTM options..."):
-        # 1. Buy OTM Call
         call_option = get_otm_option_product(option_type="C", target_premium_max=max_premium)
         if call_option:
             st.success(f"Found Call: {call_option['symbol']} at Ask: ${call_option['ask']}")
@@ -123,7 +121,6 @@ def run_strategy_cycle():
         else:
             st.warning("Koi suitable cheap Call option nahi mila testnet par.")
             
-        # 2. Buy OTM Put
         put_option = get_otm_option_product(option_type="P", target_premium_max=max_premium)
         if put_option:
             st.success(f"Found Put: {put_option['symbol']} at Ask: ${put_option['ask']}")
