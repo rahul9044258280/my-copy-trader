@@ -10,15 +10,15 @@ from datetime import datetime
 st.set_page_config(page_title="Joshi Strangle Paper Trading Bot", layout="centered")
 
 st.title("🧪 Joshi Delta Exchange Paper Trading Bot (Testnet)")
-st.write("Ye bot background mein automatic har 12 ghante mein Delta Testnet par virtual/paper trades execute karega.")
+st.write("Ye bot background mein automatic har 12 ghante mein Delta Testnet par virtual/paper trades execute kareगा.")
 
 # --- SIDEBAR: TESTNET API CREDENTIALS ---
 st.sidebar.header("Delta Testnet API Settings")
 api_key_input = st.sidebar.text_input("Testnet API Key", type="password")
 api_secret_input = st.sidebar.text_input("Testnet API Secret", type="password")
 
-# CRITICAL CHANGE: LIVE URL KI JAGAH TESTNET URL
-base_url = "https://testnet-api.delta.exchange"
+# Updated Testnet URL for India/Global Testnet
+base_url = "https://testnet-api.india.delta.exchange"
 
 lot_size = st.sidebar.number_input("Paper Order Quantity / Lots", min_value=1, value=10, step=1)
 max_premium = st.sidebar.slider("Max Premium Limit ($)", min_value=5.0, max_value=20.0, value=10.0, step=0.5)
@@ -36,49 +36,61 @@ def get_delta_signature(method, endpoint, payload_str=''):
 def get_current_btc_price():
     try:
         endpoint = "/v2/tickers"
-        response = requests.get(base_url + endpoint).json()
-        for ticker in response.get('result', []):
-            if ticker.get('symbol') == 'BTCUSD':
-                return float(ticker.get('close', 0))
+        response = requests.get(base_url + endpoint)
+        res_data = response.json()
+        if res_data.get("success"):
+            for ticker in res_data.get('result', []):
+                # Delta testnet par symbol 'BTC_USDT' ya 'BTCUSD' ho sakta hai
+                if 'BTC' in ticker.get('symbol', ''):
+                    return float(ticker.get('close', 0))
     except Exception as e:
-        print(f"Error fetching BTC price: {e}")
+        st.error(f"Error fetching BTC price: {e}")
     return 0
 
 def get_otm_option_product(option_type="C", target_premium_max=10.0):
     try:
         endpoint = "/v2/products"
-        response = requests.get(base_url + endpoint).json()
+        response = requests.get(base_url + endpoint)
+        res_data = response.json()
         
+        if not res_data.get("success"):
+            st.error("Failed to fetch products from Delta Testnet.")
+            return None
+            
         suitable_product = None
         min_diff = 99999
         
-        for product in response.get('result', []):
-            if product.get('contract_type') in ['call_options', 'put_options']:
-                if 'BTC' in product.get('symbol', ''):
-                    is_call = product.get('contract_type') == 'call_options'
+        for product in res_data.get('result', []):
+            contract_type = product.get('contract_type', '')
+            symbol = product.get('symbol', '')
+            if 'call' in contract_type or 'put' in contract_type:
+                if 'BTC' in symbol:
+                    is_call = 'call' in contract_type
                     if (option_type == "C" and is_call) or (option_type == "P" and not is_call):
-                        ticker_url = base_url + f"/v2/tickers/{product.get('symbol')}"
+                        prod_id = product.get('id')
+                        ticker_url = base_url + f"/v2/tickers?product_id={prod_id}"
                         t_res = requests.get(ticker_url).json()
-                        if t_res.get('success'):
-                            ask_price = float(t_res.get('result', {}).get('ask', 999))
-                            if 1.0 <= ask_price <= target_premium_max:
+                        if t_res.get('success') and t_res.get('result'):
+                            t_info = t_res.get('result')[0] if isinstance(t_res.get('result'), list) else t_res.get('result')
+                            ask_price = float(t_info.get('ask', 999) or 999)
+                            if 0.1 <= ask_price <= target_premium_max:
                                 diff = abs(target_premium_max - ask_price)
                                 if diff < min_diff:
                                     min_diff = diff
                                     suitable_product = {
-                                        "id": product.get('id'),
-                                        "symbol": product.get('symbol'),
+                                        "id": prod_id,
+                                        "symbol": symbol,
                                         "ask": ask_price
                                     }
         return suitable_product
     except Exception as e:
-        print(f"Error scanning options: {e}")
+        st.error(f"Error scanning options: {e}")
         return None
 
 def place_order(product_id, size, side):
     endpoint = "/v2/orders"
     payload = {
-        "product_id": product_id,
+        "product_id": int(product_id),
         "size": int(size),
         "side": side.lower(),
         "order_type": "market"
@@ -98,44 +110,33 @@ def place_order(product_id, size, side):
 
 def run_strategy_cycle():
     if not api_key_input or not api_secret_input:
-        print("Testnet API Keys missing in background task.")
+        st.warning("Kripya sidebar mein API keys enter karein.")
         return
     
-    print(f"--- [Paper Bot] Running Strategy Cycle at {datetime.now()} ---")
-    
-    # 1. Buy OTM Call (Paper)
-    call_option = get_otm_option_product(option_type="C", target_premium_max=max_premium)
-    if call_option:
-        res_call = place_order(call_option['id'], size=lot_size, side="buy")
-        print("Paper Call Order Placed:", res_call)
-        
-    # 2. Buy OMT Put (Paper)
-    put_option = get_otm_option_product(option_type="P", target_premium_max=max_premium)
-    if put_option:
-        res_put = place_order(put_option['id'], size=lot_size, side="buy")
-        print("Paper Put Order Placed:", res_put)
-
-def background_scheduler():
-    while True:
-        try:
-            run_strategy_cycle()
-        except Exception as e:
-            print(f"Scheduler Error: {e}")
-        time.sleep(43200) # 12 hours
-
-if 'bot_started' not in st.session_state:
-    st.session_state['bot_started'] = True
-    t = threading.Thread(target=background_scheduler, daemon=True)
-    t.start()
-    st.success("Paper Trading Background Scheduler started successfully!")
+    with st.spinner("Scanning testnet market for OTM options..."):
+        # 1. Buy OTM Call
+        call_option = get_otm_option_product(option_type="C", target_premium_max=max_premium)
+        if call_option:
+            st.success(f"Found Call: {call_option['symbol']} at Ask: ${call_option['ask']}")
+            res_call = place_order(call_option['id'], size=lot_size, side="buy")
+            st.json(res_call)
+        else:
+            st.warning("Koi suitable cheap Call option nahi mila testnet par.")
+            
+        # 2. Buy OTM Put
+        put_option = get_otm_option_product(option_type="P", target_premium_max=max_premium)
+        if put_option:
+            st.success(f"Found Put: {put_option['symbol']} at Ask: ${put_option['ask']}")
+            res_put = place_order(put_option['id'], size=lot_size, side="buy")
+            st.json(res_put)
+        else:
+            st.warning("Koi suitable cheap Put option nahi mila testnet par.")
 
 # --- UI DISPLAY ---
 btc_price = get_current_btc_price()
 st.metric(label="Live Testnet BTC Price (USD)", value=f"${btc_price}")
 
-st.info("Paper trading bot active hai. Ye testnet par bina asli paisa lagaye automated trades execute karega.")
+st.info("Paper trading bot active hai. Testnet par live data fetch karne ke liye niche button dabayein.")
 
 if st.button("🧪 Run Paper Strategy Manually Now"):
-    with st.spinner("Executing paper trade cycle..."):
-        run_strategy_cycle()
-        st.success("Manual paper trade cycle completed!")
+    run_strategy_cycle()
