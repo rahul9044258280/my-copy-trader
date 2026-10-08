@@ -69,7 +69,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Kill Switch Active)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -89,7 +89,7 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "Protected", "Active")
+        st.metric("Engine Status", "Ready", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
@@ -268,66 +268,6 @@ with tab3:
 with tab4:
     st.subheader("🎛️ Control & Operations Center")
     
-    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
-    with ctrl_col1:
-        if st.button("▶ START COPY TRADING"):
-            st.success("Copy Trading Engine Activated!")
-            st.session_state['engine_running'] = True
-            
-    with ctrl_col2:
-        if st.button("🛑 STOP ENGINE"):
-            st.warning("Copy Trading Engine Paused/Stopped.")
-            st.session_state['engine_running'] = False
-            
-    with ctrl_col3:
-        if st.button("🚨 EMERGENCY KILL SWITCH"):
-            st.error("🚨 KILL SWITCH ACTIVATED! Fetching and exiting all open positions for Masters & Slaves...")
-            st.session_state['engine_running'] = False
-            
-            all_accounts_kill = []
-            for m in st.session_state.get('master_objs_bulk', []):
-                all_accounts_kill.append({"id": m['id'], "type": "Master", "obj": m['obj']})
-            for s in st.session_state.get('slave_objs_bulk', []):
-                all_accounts_kill.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
-                
-            def square_off_account(acc):
-                try:
-                    positions = acc['obj'].position()
-                    if positions and positions.get('status') and positions.get('data'):
-                        for pos in positions['data']:
-                            netqty = int(pos.get('netqty', 0))
-                            if netqty != 0:
-                                # Reverse transaction type to square off
-                                tx_type = "SELL" if netqty > 0 else "BUY"
-                                qty_to_close = abs(netqty)
-                                symbol = pos.get('tradingsymbol')
-                                token = pos.get('symboltoken')
-                                exchange = pos.get('exchange', 'NSE')
-                                
-                                sq_params = {
-                                    "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
-                                    "transactiontype": tx_type, "exchange": exchange, "ordertype": "MARKET",
-                                    "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
-                                    "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
-                                }
-                                acc['obj'].placeOrder(sq_params)
-                                log_trade(acc['type'], acc['id'], symbol, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", "EXIT")
-                        return True
-                except Exception:
-                    pass
-                return False
-
-            if all_accounts_kill:
-                with ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = [executor.submit(square_off_account, acc) for acc in all_accounts_kill]
-                    for f in as_completed(futures):
-                        f.result()
-                st.success("🚨 Emergency Exit Completed across all connected accounts!")
-            else:
-                st.warning("Koi active accounts connected nahi hain!")
-
-    st.markdown("---")
-    st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
     exec_col1, exec_col2 = st.columns(2)
     
     with exec_col1:
@@ -342,14 +282,22 @@ with tab4:
         st.markdown("### 📋 System Readiness")
         active_masters = len(st.session_state.get('master_objs_bulk', []))
         active_slaves = len(st.session_state.get('slave_objs_bulk', []))
-        engine_state = st.session_state.get('engine_running', True)
+        engine_state = st.session_state.get('engine_running', False)
         
         st.info(f"**Engine State:** {'Running 🟢' if engine_state else 'Stopped 🔴'}\n\n**Target Symbol:** {symbol}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
-        
-        if st.button("🔥 FIRE ULTRA-FAST COPY TRADE"):
-            if not engine_state:
-                st.error("Engine is currently stopped or kill switch is active! Start engine first.")
-            elif active_masters > 0 and active_slaves > 0:
+
+    st.markdown("---")
+    
+    # 3 Control Buttons (START COPY TRADING now executes the trade)
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
+    
+    with ctrl_col1:
+        if st.button("▶ START COPY TRADING"):
+            st.session_state['engine_running'] = True
+            active_m = len(st.session_state.get('master_objs_bulk', []))
+            active_s = len(st.session_state.get('slave_objs_bulk', []))
+            
+            if active_m > 0 and active_s > 0:
                 order_params = {
                     "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": symbol_token,
                     "transactiontype": transaction_type, "exchange": "NSE", "ordertype": order_type,
@@ -367,7 +315,7 @@ with tab4:
                         return (False, client_item['id'], str(e))
 
                 status_container = st.empty()
-                status_container.text("🚀 Executing master and broadcasting to all slaves simultaneously...")
+                status_container.text("🚀 Engine Started! Executing master and broadcasting to all slaves simultaneously...")
 
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
@@ -396,9 +344,60 @@ with tab4:
                             failed_slaves += 1
 
                 status_container.empty()
-                st.success(f"⚡ Ultra-Fast Copy Complete! Successful Slaves: {success_slaves} | Failed Slaves: {failed_slaves}")
+                st.success(f"⚡ Copy Trade Executed! Successful Slaves: {success_slaves} | Failed Slaves: {failed_slaves}")
             else:
-                st.warning("Pehle accounts connect karein!")
+                st.warning("Pehle Tab 1 se accounts connect karein!")
+
+    with ctrl_col2:
+        if st.button("🛑 STOP ENGINE"):
+            st.warning("Copy Trading Engine Paused/Stopped.")
+            st.session_state['engine_running'] = False
+            
+    with ctrl_col3:
+        if st.button("🚨 EMERGENCY KILL SWITCH"):
+            st.error("🚨 KILL SWITCH ACTIVATED! Fetching and exiting all open positions for Masters & Slaves...")
+            st.session_state['engine_running'] = False
+            
+            all_accounts_kill = []
+            for m in st.session_state.get('master_objs_bulk', []):
+                all_accounts_kill.append({"id": m['id'], "type": "Master", "obj": m['obj']})
+            for s in st.session_state.get('slave_objs_bulk', []):
+                all_accounts_kill.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+                
+            def square_off_account(acc):
+                try:
+                    positions = acc['obj'].position()
+                    if positions and positions.get('status') and positions.get('data'):
+                        for pos in positions['data']:
+                            netqty = int(pos.get('netqty', 0))
+                            if netqty != 0:
+                                tx_type = "SELL" if netqty > 0 else "BUY"
+                                qty_to_close = abs(netqty)
+                                symbol_name = pos.get('tradingsymbol')
+                                token = pos.get('symboltoken')
+                                exchange = pos.get('exchange', 'NSE')
+                                
+                                sq_params = {
+                                    "variety": "NORMAL", "tradingsymbol": symbol_name, "symboltoken": token,
+                                    "transactiontype": tx_type, "exchange": exchange, "ordertype": "MARKET",
+                                    "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
+                                    "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
+                                }
+                                acc['obj'].placeOrder(sq_params)
+                                log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", "EXIT")
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            if all_accounts_kill:
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    futures = [executor.submit(square_off_account, acc) for acc in all_accounts_kill]
+                    for f in as_completed(futures):
+                        f.result()
+                st.success("🚨 Emergency Exit Completed across all connected accounts!")
+            else:
+                st.warning("Koi active accounts connected nahi hain!")
 
 with tab5:
     st.subheader("📜 Execution History & Logs")
