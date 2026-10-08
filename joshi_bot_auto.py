@@ -5,9 +5,10 @@ import yfinance as yf
 import pandas as pd
 import sqlite3
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Page Configuration
-st.set_page_config(page_title="Angel One Bulk Copy Trading Terminal (Auto-Login)", layout="wide")
+st.set_page_config(page_title="Angel One Ultra-Fast Copy Trading Terminal", layout="wide")
 
 # Custom Clean Dark Cinematic Theme
 st.markdown("""
@@ -57,15 +58,18 @@ def init_db():
 db_conn = init_db()
 
 def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
-    cursor = db_conn.cursor()
-    cursor.execute('''
-        INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), account_type, client_id, symbol, action, qty, status, str(order_id)))
-    db_conn.commit()
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute('''
+            INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, status, str(order_id)))
+        db_conn.commit()
+    except Exception:
+        pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Bulk Copy Trading Terminal (Auto 24-hr Refresh)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Milliseconds Execution)")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -85,14 +89,14 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("System Status", "Auto-Login Ready", "Active")
+        st.metric("Engine Status", "Multi-Threaded Ready", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
 st.markdown("---")
 
 # Main Interface Tabs
-tab1, tab2, tab3 = st.tabs(["👥 Client Manager & Auto-Login", "📊 Order Execution Terminal", "📜 Trade Logs"])
+tab1, tab2, tab3 = st.tabs(["👥 Client Manager & Fast Auto-Login", "📊 Ultra-Fast Execution Terminal", "📜 Trade Logs"])
 
 with tab1:
     col_m1, col_m2 = st.columns(2)
@@ -123,51 +127,50 @@ with tab1:
                     st.warning("Client ID aur API Key zaroori hai!")
 
     with col_m2:
-        st.subheader("🔄 Daily Auto-Login (24-hr Token Refresh)")
-        st.info("Roz subah market khulne par aapko kisi se poochne ki zaroorat nahi hai. Yeh button database me saved saare clients ke credentials aur TOTP use karke automatic session generate kar lega.")
+        st.subheader("🚀 Parallel Auto-Login (Fast 24-hr Refresh)")
+        st.info("Yeh multi-threaded login engine ek sath saare accounts ko milliseconds me authenticate kar dega.")
         
-        if st.button("🚀 1-Click Auto-Login All 1000+ Clients"):
+        if st.button("⚡ Parallel Login All 1000+ Clients"):
             cursor = db_conn.cursor()
             cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type FROM clients")
             all_rows = cursor.fetchall()
             
-            master_objs = []
-            slave_objs = []
-            
-            progress_bar = st.progress(0)
-            total_accs = len(all_rows)
-            
-            if total_accs == 0:
+            if not all_rows:
                 st.warning("Pehle clients database me add karein!")
             else:
-                success_count = 0
-                fail_count = 0
-                for index, row in enumerate(all_rows):
+                master_objs = []
+                slave_objs = []
+                
+                def login_client(row):
                     try:
                         c_id, pwd, totp_sec, api_k, acc_type = row
-                        # Automatically generate live TOTP using pyotp without manual entry
                         totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
-                        
                         smart_obj = SmartConnect(api_key=api_k)
                         session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
-                        
                         if session_data and session_data.get('status'):
-                            if acc_type == 'master':
-                                master_objs.append({"obj": smart_obj, "id": c_id})
-                            else:
-                                slave_objs.append({"obj": smart_obj, "id": c_id})
-                            success_count += 1
-                        else:
-                            fail_count += 1
+                            return {"obj": smart_obj, "id": c_id, "type": acc_type}
                     except Exception:
-                        fail_count += 1
-                        
-                    progress_bar.progress((index + 1) / total_accs)
+                        pass
+                    return None
+
+                progress_text = st.empty()
+                progress_text.text("Logging in accounts concurrently...")
+                
+                # Using ThreadPoolExecutor for fast parallel login
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    futures = [executor.submit(login_client, row) for row in all_rows]
+                    for future in as_completed(futures):
+                        res = future.result()
+                        if res:
+                            if res['type'] == 'master':
+                                master_objs.append({"obj": res['obj'], "id": res['id']})
+                            else:
+                                slave_objs.append({"obj": res['obj'], "id": res['id']})
                 
                 st.session_state['master_objs_bulk'] = master_objs
                 st.session_state['slave_objs_bulk'] = slave_objs
-                st.success(f"Auto-Login Complete! Success: {success_count} | Failed: {fail_count}")
-                st.info(f"Connected Masters: {len(master_objs)} | Connected Slaves: {len(slave_objs)}")
+                progress_text.empty()
+                st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Slaves: {len(slave_objs)}")
 
     st.markdown("### 📋 Saved Accounts Database List")
     try:
@@ -183,13 +186,11 @@ with tab1:
                 db_conn.commit()
                 st.success("Saare accounts hata diye gaye hain!")
                 st.rerun()
-        else:
-            st.info("Abhi tak koi account saved nahi hai.")
     except Exception:
         pass
 
 with tab2:
-    st.subheader("⚡ Master Order Execution & Mirroring")
+    st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
     exec_col1, exec_col2 = st.columns(2)
     
     with exec_col1:
@@ -201,12 +202,12 @@ with tab2:
         price = st.number_input("Limit Price", value=0.0)
 
     with exec_col2:
-        st.markdown("### 📋 Active Status")
+        st.markdown("### 📋 System Readiness")
         active_masters = len(st.session_state.get('master_objs_bulk', []))
         active_slaves = len(st.session_state.get('slave_objs_bulk', []))
         st.info(f"**Target Symbol:** {symbol}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
         
-        if st.button("🔥 Execute & Copy Across All"):
+        if st.button("🔥 FIRE ULTRA-FAST COPY TRADE"):
             if active_masters > 0 and active_slaves > 0:
                 order_params = {
                     "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": symbol_token,
@@ -214,24 +215,52 @@ with tab2:
                     "producttype": "DELIVERY", "duration": "DAY", "price": str(price) if order_type == "LIMIT" else "0",
                     "squareoff": "0", "stoploss": "0", "quantity": str(qty)
                 }
-                for master in st.session_state['master_objs_bulk']:
-                    try:
-                        m_res = master["obj"].placeOrder(order_params)
-                        st.success(f"Master ({master['id']}) Placed! ID: {m_res}")
-                        log_trade("Master", master['id'], symbol, transaction_type, qty, "SUCCESS", m_res)
-                    except Exception as me:
-                        st.error(f"Master Error: {me}")
-                        log_trade("Master", master['id'], symbol, transaction_type, qty, "FAILED", str(me))
                 
-                for slave in st.session_state['slave_objs_bulk']:
+                # Helper function to place order in background thread
+                def place_single_order(client_item, acc_type):
                     try:
-                        s_res = slave["obj"].placeOrder(order_params)
-                        log_trade("Slave", slave['id'], symbol, transaction_type, qty, "SUCCESS", s_res)
-                    except Exception as se:
-                        log_trade("Slave", slave['id'], symbol, transaction_type, qty, "FAILED", str(se))
-                st.success("Trade successfully mirrored to all slave accounts!")
+                        res = client_item["obj"].placeOrder(order_params)
+                        log_trade(acc_type, client_item['id'], symbol, transaction_type, qty, "SUCCESS", res)
+                        return (True, client_item['id'], res)
+                    except Exception as e:
+                        log_trade(acc_type, client_item['id'], symbol, transaction_type, qty, "FAILED", str(e))
+                        return (False, client_item['id'], str(e))
+
+                status_container = st.empty()
+                status_container.text("🚀 Executing master and broadcasting to all slaves simultaneously...")
+
+                # 1. Execute Master orders first
+                master_futures = []
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    for master in st.session_state['master_objs_bulk']:
+                        master_futures.append(executor.submit(place_single_order, master, "Master"))
+                    
+                    for f in as_completed(master_futures):
+                        success, m_id, m_res = f.result()
+                        if success:
+                            st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
+                        else:
+                            st.error(f"Master ({m_id}) Error: {m_res}")
+
+                # 2. Mirror instantly to all Slave accounts concurrently using ThreadPoolExecutor (Max Workers = 100 for millisecond speed)
+                slave_futures = []
+                with ThreadPoolExecutor(max_workers=100) as executor:
+                    for slave in st.session_state['slave_objs_bulk']:
+                        slave_futures.append(executor.submit(place_single_order, slave, "Slave"))
+                    
+                    success_slaves = 0
+                    failed_slaves = 0
+                    for f in as_completed(slave_futures):
+                        success, s_id, _ = f.result()
+                        if success:
+                            success_slaves += 1
+                        else:
+                            failed_slaves += 1
+
+                status_container.empty()
+                st.success(f"⚡ Ultra-Fast Copy Complete! Successful Slaves: {success_slaves} | Failed Slaves: {failed_slaves}")
             else:
-                st.warning("Pehle 'Auto-Login All' button click karke sessions activate karein!")
+                st.warning("Pehle accounts connect karein!")
 
 with tab3:
     st.subheader("📜 Execution History & Logs")
