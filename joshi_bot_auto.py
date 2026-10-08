@@ -263,7 +263,6 @@ with tab1:
                 expander_label = f"👑 Master{display_name} - ID: {c_id}" if acc_type == 'master' else f"🔹 Slave{display_name} - ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
                 
                 with st.expander(expander_label):
-                    # Full Details Edit Form per account
                     with st.form(f"edit_form_{db_id}"):
                         st.markdown(f"#### Edit Details for {c_id}")
                         e_name = st.text_input("Account Name", value=c_name if c_name else "", key=f"ename_{db_id}")
@@ -272,11 +271,16 @@ with tab1:
                         e_totp = st.text_input("TOTP Secret Key", value=c_totp if c_totp else "", key=f"etotp_{db_id}")
                         e_apikey = st.text_input("API Key", value=c_apikey if c_apikey else "", key=f"eapi_{db_id}")
                         
-                        col_e1, col_e2 = st.columns(2)
-                        with col_e1:
+                        if acc_type == 'slave':
+                            col_e1, col_e2 = st.columns(2)
+                            with col_e1:
+                                e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
+                            with col_e2:
+                                e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
+                        else:
+                            # Master ke liye sirf Status rahega, Multiplier hata diya gaya hai
                             e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
-                        with col_e2:
-                            e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
+                            e_mult = 1  # Default for master
                             
                         save_edits = st.form_submit_button("💾 Save All Changes")
                         if save_edits:
