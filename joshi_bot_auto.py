@@ -64,6 +64,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_name TEXT,
             client_id TEXT UNIQUE,
             password TEXT,
             totp_secret TEXT,
@@ -73,6 +74,10 @@ def init_db():
             lot_multiplier INTEGER DEFAULT 1
         )
     ''')
+    try:
+        cursor.execute("ALTER TABLE clients ADD COLUMN client_name TEXT")
+    except Exception:
+        pass
     try:
         cursor.execute("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1")
     except Exception:
@@ -138,7 +143,7 @@ except Exception:
 
 st.markdown("---")
 
-# Main Interface Tabs (Ultra-Fast Execution Terminal is now at No. 2 position)
+# Main Interface Tabs (Ultra-Fast Execution Terminal is at No. 2 position)
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "👥 Client Manager & Fast Login", 
     "📊 Ultra-Fast Execution Terminal", 
@@ -148,12 +153,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    # Landscape Split: Left for Master Section, Right for Slave Section
     master_col, slave_col = st.columns(2)
     
     with master_col:
         st.subheader("👑 Master Account Section")
         with st.form("add_master_form"):
+            m_name = st.text_input("Master Account Name / Owner", key="m_name")
             m_client_id = st.text_input("Master Client ID / User ID", key="m_id")
             m_password = st.text_input("Master Password / MPIN", type="password", key="m_pwd")
             m_totp = st.text_input("Master TOTP Secret Key", key="m_totp")
@@ -165,9 +170,9 @@ with tab1:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
-                            INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
-                            VALUES (?, ?, ?, ?, 'master', 1, 1)
-                        ''', (m_client_id, m_password, m_totp, m_api_key))
+                            INSERT OR REPLACE INTO clients (client_name, client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
+                            VALUES (?, ?, ?, ?, ?, 'master', 1, 1)
+                        ''', (m_name, m_client_id, m_password, m_totp, m_api_key))
                         db_conn.commit()
                         st.success(f"Master Account {m_client_id} successfully saved!")
                     except Exception as db_err:
@@ -178,6 +183,7 @@ with tab1:
     with slave_col:
         st.subheader("🔗 Slave Accounts Section")
         with st.form("add_slave_form"):
+            s_name = st.text_input("Slave Account Name (e.g. Papa, Friend, etc.)", key="s_name")
             s_client_id = st.text_input("Slave Client ID / User ID", key="s_id")
             s_password = st.text_input("Slave Password / MPIN", type="password", key="s_pwd")
             s_totp = st.text_input("Slave TOTP Secret Key", key="s_totp")
@@ -190,11 +196,11 @@ with tab1:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
-                            INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
-                            VALUES (?, ?, ?, ?, 'slave', 1, ?)
-                        ''', (s_client_id, s_password, s_totp, s_api_key, s_multiplier))
+                            INSERT OR REPLACE INTO clients (client_name, client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
+                            VALUES (?, ?, ?, ?, ?, 'slave', 1, ?)
+                        ''', (s_name, s_client_id, s_password, s_totp, s_api_key, s_multiplier))
                         db_conn.commit()
-                        st.success(f"Slave Account {s_client_id} successfully saved!")
+                        st.success(f"Slave Account [{s_name}] {s_client_id} successfully saved!")
                     except Exception as db_err:
                         st.error(f"Error: {db_err}")
                 else:
@@ -244,35 +250,45 @@ with tab1:
             progress_text.empty()
             st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
 
-    st.markdown("### 📋 Manage Saved Accounts & Individual Controls")
+    st.markdown("### 📋 Manage Saved Accounts & Full Details Editor")
     try:
         cursor = db_conn.cursor()
-        cursor.execute("SELECT id, client_id, account_type, api_key, is_active, lot_multiplier FROM clients")
+        cursor.execute("SELECT id, client_name, client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients")
         all_db_clients = cursor.fetchall()
         
         if all_db_clients:
             for row in all_db_clients:
-                db_id, c_id, acc_type, api_k, is_act, mult = row
-                
-                expander_label = f"👑 Master ID: {c_id}" if acc_type == 'master' else f"🔹 Slave ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
+                db_id, c_name, c_id, c_pwd, c_totp, c_apikey, acc_type, is_act, mult = row
+                display_name = f" [{c_name}]" if c_name else ""
+                expander_label = f"👑 Master{display_name} - ID: {c_id}" if acc_type == 'master' else f"🔹 Slave{display_name} - ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
                 
                 with st.expander(expander_label):
-                    if acc_type == 'slave':
-                        col_c1, col_c2, col_c3 = st.columns(3)
-                        with col_c1:
-                            new_act_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"status_{db_id}")
-                        with col_c2:
-                            new_mult_val = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"mult_{db_id}")
-                        with col_c3:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            update_btn = st.button("💾 Update Settings", key=f"update_{db_id}")
+                    # Full Details Edit Form per account
+                    with st.form(f"edit_form_{db_id}"):
+                        st.markdown(f"#### Edit Details for {c_id}")
+                        e_name = st.text_input("Account Name", value=c_name if c_name else "", key=f"ename_{db_id}")
+                        e_cid = st.text_input("Client ID", value=c_id, key=f"ecid_{db_id}")
+                        e_pwd = st.text_input("Password / MPIN", type="password", value=c_pwd if c_pwd else "", key=f"epwd_{db_id}")
+                        e_totp = st.text_input("TOTP Secret Key", value=c_totp if c_totp else "", key=f"etotp_{db_id}")
+                        e_apikey = st.text_input("API Key", value=c_apikey if c_apikey else "", key=f"eapi_{db_id}")
+                        
+                        col_e1, col_e2 = st.columns(2)
+                        with col_e1:
+                            e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
+                        with col_e2:
+                            e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
                             
-                        if update_btn:
-                            cursor.execute("UPDATE clients SET is_active = ?, lot_multiplier = ? WHERE id = ?", (new_act_status, new_mult_val, db_id))
+                        save_edits = st.form_submit_button("💾 Save All Changes")
+                        if save_edits:
+                            cursor.execute("""
+                                UPDATE clients 
+                                SET client_name = ?, client_id = ?, password = ?, totp_secret = ?, api_key = ?, is_active = ?, lot_multiplier = ? 
+                                WHERE id = ?
+                            """, (e_name, e_cid, e_pwd, e_totp, e_apikey, e_status, e_mult, db_id))
                             db_conn.commit()
-                            st.success(f"Settings updated for {c_id}!")
+                            st.success(f"Account {e_cid} updated successfully!")
                             st.rerun()
-                    
+
                     if st.button(f"🗑️ Delete Client {c_id}", key=f"del_{db_id}"):
                         cursor.execute("DELETE FROM clients WHERE id = ?", (db_id,))
                         db_conn.commit()
