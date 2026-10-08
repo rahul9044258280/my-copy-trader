@@ -25,7 +25,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize SQLite Database with Enhanced Columns for Slaves Control
+# Initialize SQLite Database & Auto-migrate columns if missing
 def init_db():
     conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -41,6 +41,16 @@ def init_db():
             lot_multiplier INTEGER DEFAULT 1
         )
     ''')
+    # Safe migration for existing tables
+    try:
+        cursor.execute("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE clients ADD COLUMN lot_multiplier INTEGER DEFAULT 1")
+    except Exception:
+        pass
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,78 +117,101 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    col_m1, col_m2 = st.columns(2)
+    # Landscape Split: Left for Master Section, Right for Slave Section
+    master_col, slave_col = st.columns(2)
     
-    with col_m1:
-        st.subheader("➕ Naya Client Add Karein")
-        with st.form("add_client_form"):
-            new_client_id = st.text_input("Client ID / User ID")
-            new_password = st.text_input("Password / MPIN", type="password")
-            new_totp = st.text_input("TOTP Secret Key (Google Auth Key)")
-            new_api_key = st.text_input("API Key")
-            new_acc_type = st.selectbox("Account Type", ["slave", "master"])
-            new_multiplier = st.number_input("Lot/Quantity Multiplier (Default: 1)", min_value=1, value=1)
+    with master_col:
+        st.subheader("👑 Master Account Section")
+        with st.form("add_master_form"):
+            m_client_id = st.text_input("Master Client ID / User ID", key="m_id")
+            m_password = st.text_input("Master Password / MPIN", type="password", key="m_pwd")
+            m_totp = st.text_input("Master TOTP Secret Key", key="m_totp")
+            m_api_key = st.text_input("Master API Key", key="m_apikey")
             
-            submit_client = st.form_submit_button("💾 Save Client to Database")
-            if submit_client:
-                if new_client_id and new_api_key:
+            submit_master = st.form_submit_button("💾 Save Master Account")
+            if submit_master:
+                if m_client_id and m_api_key:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
                             INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
-                            VALUES (?, ?, ?, ?, ?, 1, ?)
-                        ''', (new_client_id, new_password, new_totp, new_api_key, new_acc_type, new_multiplier))
+                            VALUES (?, ?, ?, ?, 'master', 1, 1)
+                        ''', (m_client_id, m_password, m_totp, m_api_key))
                         db_conn.commit()
-                        st.success(f"Client {new_client_id} successfully saved!")
+                        st.success(f"Master Account {m_client_id} successfully saved!")
                     except Exception as db_err:
                         st.error(f"Error: {db_err}")
                 else:
                     st.warning("Client ID aur API Key zaroori hai!")
 
-    with col_m2:
-        st.subheader("🚀 Parallel Auto-Login")
-        st.info("Multi-threaded login engine jo saare active accounts ko ek sath authenticate karega.")
-        
-        if st.button("⚡ Parallel Login All 1000+ Clients"):
-            cursor = db_conn.cursor()
-            cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
-            all_rows = cursor.fetchall()
+    with slave_col:
+        st.subheader("🔗 Slave Accounts Section")
+        with st.form("add_slave_form"):
+            s_client_id = st.text_input("Slave Client ID / User ID", key="s_id")
+            s_password = st.text_input("Slave Password / MPIN", type="password", key="s_pwd")
+            s_totp = st.text_input("Slave TOTP Secret Key", key="s_totp")
+            s_api_key = st.text_input("Slave API Key", key="s_apikey")
+            s_multiplier = st.number_input("Lot/Quantity Multiplier (Default: 1)", min_value=1, value=1, key="s_mult")
             
-            if not all_rows:
-                st.warning("Pehle active clients database me add karein!")
-            else:
-                master_objs = []
-                slave_objs = []
-                
-                def login_client(row):
+            submit_slave = st.form_submit_button("💾 Save Slave Account")
+            if submit_slave:
+                if s_client_id and s_api_key:
                     try:
-                        c_id, pwd, totp_sec, api_k, acc_type, active, mult = row
-                        totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
-                        smart_obj = SmartConnect(api_key=api_k)
-                        session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
-                        if session_data and session_data.get('status'):
-                            return {"obj": smart_obj, "id": c_id, "type": acc_type, "multiplier": mult}
-                    except Exception:
-                        pass
-                    return None
+                        cursor = db_conn.cursor()
+                        cursor.execute('''
+                            INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
+                            VALUES (?, ?, ?, ?, 'slave', 1, ?)
+                        ''', (s_client_id, s_password, s_totp, s_api_key, s_multiplier))
+                        db_conn.commit()
+                        st.success(f"Slave Account {s_client_id} successfully saved!")
+                    except Exception as db_err:
+                        st.error(f"Error: {db_err}")
+                else:
+                    st.warning("Client ID aur API Key zaroori hai!")
 
-                progress_text = st.empty()
-                progress_text.text("Logging in accounts concurrently...")
-                
-                with ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = [executor.submit(login_client, row) for row in all_rows]
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res:
-                            if res['type'] == 'master':
-                                master_objs.append({"obj": res['obj'], "id": res['id']})
-                            else:
-                                slave_objs.append({"obj": res['obj'], "id": res['id'], "multiplier": res['multiplier']})
-                
-                st.session_state['master_objs_bulk'] = master_objs
-                st.session_state['slave_objs_bulk'] = slave_objs
-                progress_text.empty()
-                st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
+    st.markdown("---")
+    st.subheader("🚀 Parallel Auto-Login & Control Panel")
+    
+    if st.button("⚡ Parallel Login All 1000+ Clients"):
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
+        all_rows = cursor.fetchall()
+        
+        if not all_rows:
+            st.warning("Pehle active clients database me add karein!")
+        else:
+            master_objs = []
+            slave_objs = []
+            
+            def login_client(row):
+                try:
+                    c_id, pwd, totp_sec, api_k, acc_type, active, mult = row
+                    totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
+                    smart_obj = SmartConnect(api_key=api_k)
+                    session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
+                    if session_data and session_data.get('status'):
+                        return {"obj": smart_obj, "id": c_id, "type": acc_type, "multiplier": mult}
+                except Exception:
+                    pass
+                return None
+
+            progress_text = st.empty()
+            progress_text.text("Logging in accounts concurrently...")
+            
+            with ThreadPoolExecutor(max_workers=50) as executor:
+                futures = [executor.submit(login_client, row) for row in all_rows]
+                for future in as_completed(futures):
+                    res = future.result()
+                    if res:
+                        if res['type'] == 'master':
+                            master_objs.append({"obj": res['obj'], "id": res['id']})
+                        else:
+                            slave_objs.append({"obj": res['obj'], "id": res['id'], "multiplier": res['multiplier']})
+            
+            st.session_state['master_objs_bulk'] = master_objs
+            st.session_state['slave_objs_bulk'] = slave_objs
+            progress_text.empty()
+            st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
 
     st.markdown("### 📋 Manage Saved Accounts & Individual Controls")
     try:
@@ -190,23 +223,25 @@ with tab1:
             for row in all_db_clients:
                 db_id, c_id, acc_type, api_k, is_act, mult = row
                 
-                with st.expander(f"🔹 [{acc_type.upper()}] Client ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"):
-                    col_c1, col_c2, col_c3 = st.columns(3)
+                expander_label = f"👑 Master ID: {c_id}" if acc_type == 'master' else f"🔹 Slave ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
+                
+                with st.expander(expander_label):
+                    if acc_type == 'slave':
+                        col_c1, col_c2, col_c3 = st.columns(3)
+                        with col_c1:
+                            new_act_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"status_{db_id}")
+                        with col_c2:
+                            new_mult_val = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"mult_{db_id}")
+                        with col_c3:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            update_btn = st.button("💾 Update Settings", key=f"update_{db_id}")
+                            
+                        if update_btn:
+                            cursor.execute("UPDATE clients SET is_active = ?, lot_multiplier = ? WHERE id = ?", (new_act_status, new_mult_val, db_id))
+                            db_conn.commit()
+                            st.success(f"Settings updated for {c_id}!")
+                            st.rerun()
                     
-                    with col_c1:
-                        new_act_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"status_{db_id}")
-                    with col_c2:
-                        new_mult_val = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"mult_{db_id}")
-                    with col_c3:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        update_btn = st.button("💾 Update Settings", key=f"update_{db_id}")
-                        
-                    if update_btn:
-                        cursor.execute("UPDATE clients SET is_active = ?, lot_multiplier = ? WHERE id = ?", (new_act_status, new_mult_val, db_id))
-                        db_conn.commit()
-                        st.success(f"Settings updated for {c_id}!")
-                        st.rerun()
-                        
                     if st.button(f"🗑️ Delete Client {c_id}", key=f"del_{db_id}"):
                         cursor.execute("DELETE FROM clients WHERE id = ?", (db_id,))
                         db_conn.commit()
@@ -233,7 +268,7 @@ with tab2:
             all_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
             
         if not all_accounts:
-            st.warning("Pehle Tab 1 se accounts login/connect karein!")
+            st.warning("Pehle Tab 1 से accounts login/connect karein!")
         else:
             balance_results = []
             
@@ -330,7 +365,6 @@ with tab4:
                         return (False, master['id'], str(e))
 
                 def place_slave_order(slave):
-                    # Check from DB if slave is active (is_active == 1)
                     try:
                         cur = db_conn.cursor()
                         cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
