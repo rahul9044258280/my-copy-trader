@@ -69,7 +69,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Control Center)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Kill Switch Active)")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -89,7 +89,7 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "Control Panel Active", "Active")
+        st.metric("Engine Status", "Protected", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
@@ -268,20 +268,63 @@ with tab3:
 with tab4:
     st.subheader("🎛️ Control & Operations Center")
     
-    # 3 Control Buttons added as requested from reference image
     ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
     with ctrl_col1:
         if st.button("▶ START COPY TRADING"):
             st.success("Copy Trading Engine Activated!")
             st.session_state['engine_running'] = True
+            
     with ctrl_col2:
         if st.button("🛑 STOP ENGINE"):
             st.warning("Copy Trading Engine Paused/Stopped.")
             st.session_state['engine_running'] = False
+            
     with ctrl_col3:
         if st.button("🚨 EMERGENCY KILL SWITCH"):
-            st.error("EMERGENCY KILL SWITCH ACTIVATED! All operations halted.")
+            st.error("🚨 KILL SWITCH ACTIVATED! Fetching and exiting all open positions for Masters & Slaves...")
             st.session_state['engine_running'] = False
+            
+            all_accounts_kill = []
+            for m in st.session_state.get('master_objs_bulk', []):
+                all_accounts_kill.append({"id": m['id'], "type": "Master", "obj": m['obj']})
+            for s in st.session_state.get('slave_objs_bulk', []):
+                all_accounts_kill.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+                
+            def square_off_account(acc):
+                try:
+                    positions = acc['obj'].position()
+                    if positions and positions.get('status') and positions.get('data'):
+                        for pos in positions['data']:
+                            netqty = int(pos.get('netqty', 0))
+                            if netqty != 0:
+                                # Reverse transaction type to square off
+                                tx_type = "SELL" if netqty > 0 else "BUY"
+                                qty_to_close = abs(netqty)
+                                symbol = pos.get('tradingsymbol')
+                                token = pos.get('symboltoken')
+                                exchange = pos.get('exchange', 'NSE')
+                                
+                                sq_params = {
+                                    "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
+                                    "transactiontype": tx_type, "exchange": exchange, "ordertype": "MARKET",
+                                    "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
+                                    "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
+                                }
+                                acc['obj'].placeOrder(sq_params)
+                                log_trade(acc['type'], acc['id'], symbol, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", "EXIT")
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            if all_accounts_kill:
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    futures = [executor.submit(square_off_account, acc) for acc in all_accounts_kill]
+                    for f in as_completed(futures):
+                        f.result()
+                st.success("🚨 Emergency Exit Completed across all connected accounts!")
+            else:
+                st.warning("Koi active accounts connected nahi hain!")
 
     st.markdown("---")
     st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
