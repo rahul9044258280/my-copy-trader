@@ -143,7 +143,7 @@ except Exception:
 
 st.markdown("---")
 
-# Main Interface Tabs (Ultra-Fast Execution Terminal is at No. 2 position)
+# Main Interface Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "👥 Client Manager & Fast Login", 
     "📊 Ultra-Fast Execution Terminal", 
@@ -207,9 +207,9 @@ with tab1:
                     st.warning("Client ID aur API Key zaroori hai!")
 
     st.markdown("---")
-    st.subheader("🚀 Parallel Auto-Login & Control Panel")
+    st.subheader("🚀 Parallel Auto-Login & Token Regeneration Panel")
     
-    if st.button("⚡ Parallel Login All 1000+ Clients"):
+    if st.button("⚡ Parallel Auto-Login All 1000+ Clients"):
         cursor = db_conn.cursor()
         cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
         all_rows = cursor.fetchall()
@@ -233,7 +233,7 @@ with tab1:
                 return None
 
             progress_text = st.empty()
-            progress_text.text("Logging in accounts concurrently...")
+            progress_text.text("Auto-generating fresh tokens & logging in accounts concurrently...")
             
             with ThreadPoolExecutor(max_workers=50) as executor:
                 futures = [executor.submit(login_client, row) for row in all_rows]
@@ -248,7 +248,7 @@ with tab1:
             st.session_state['master_objs_bulk'] = master_objs
             st.session_state['slave_objs_bulk'] = slave_objs
             progress_text.empty()
-            st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
+            st.success(f"Auto-Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
 
     st.markdown("### 📋 Manage Saved Accounts & Full Details Editor")
     try:
@@ -278,9 +278,8 @@ with tab1:
                             with col_e2:
                                 e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
                         else:
-                            # Master ke liye sirf Status rahega, Multiplier hata diya gaya hai
                             e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
-                            e_mult = 1  # Default for master
+                            e_mult = 1  
                             
                         save_edits = st.form_submit_button("💾 Save All Changes")
                         if save_edits:
@@ -398,7 +397,7 @@ with tab2:
                 status_container.empty()
                 st.success(f"⚡ Copy Trade Executed! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
             else:
-                st.warning("Pehle Tab 1 से accounts connect karein!")
+                st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
     with ctrl_col2:
         if st.button("🛑 STOP ENGINE"):
