@@ -4,7 +4,7 @@ import pyotp
 import yfinance as yf
 import pandas as pd
 import sqlite3
-from datetime import datetime
+from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Page Configuration
@@ -69,7 +69,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Live Balance Tracking)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (P&L & Balance Tracking)")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -89,14 +89,20 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "Live Balance Active", "Active")
+        st.metric("Engine Status", "P&L Module Active", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
 st.markdown("---")
 
-# Main Interface Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["👥 Client Manager & Fast Login", "💰 Live Balances", "📊 Ultra-Fast Execution Terminal", "📜 Trade Logs"])
+# Main Interface Tabs (Added P&L Tab)
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "👥 Client Manager & Fast Login", 
+    "💰 Live Balances", 
+    "📈 P&L Report (Date Range)", 
+    "📊 Ultra-Fast Execution Terminal", 
+    "📜 Trade Logs"
+])
 
 with tab1:
     col_m1, col_m2 = st.columns(2)
@@ -226,6 +232,42 @@ with tab2:
             st.dataframe(df_balances, use_container_width=True)
 
 with tab3:
+    st.subheader("📈 Profit & Loss (P&L) Report with Date Range")
+    st.write("Har account ke execution logs aur trade performance ko diye gaye date range ke mutabiq analyze karein.")
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        start_date = st.date_input("Start Date", value=date.today())
+    with col_d2:
+        end_date = st.date_input("End Date", value=date.today())
+        
+    if st.button("📊 Generate P&L Report"):
+        try:
+            cursor = db_conn.cursor()
+            # Query logs filtered by date range
+            query = """
+                SELECT client_id, account_type, symbol, action, qty, status, timestamp 
+                FROM logs 
+                WHERE date(timestamp) BETWEEN date(?) AND date(?)
+            """
+            cursor.execute(query, (str(start_date), str(end_date)))
+            rows = cursor.fetchall()
+            
+            if rows:
+                df_pnl = pd.DataFrame(rows, columns=["Client ID", "Account Type", "Symbol", "Action", "Qty", "Status", "Timestamp"])
+                st.markdown("### 📋 Filtered Execution & Performance Records")
+                st.dataframe(df_pnl, use_container_width=True)
+                
+                # Summary metrics per client ID
+                st.markdown("### 📊 Summary per Client ID")
+                summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
+                st.dataframe(summary_df, use_container_width=True)
+            else:
+                st.info("Chuni gayi date range me koi trade logs available nahi hain.")
+        except Exception as pnl_err:
+            st.error(f"Error generating report: {pnl_err}")
+
+with tab4:
     st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
     exec_col1, exec_col2 = st.columns(2)
     
@@ -295,7 +337,7 @@ with tab3:
             else:
                 st.warning("Pehle accounts connect karein!")
 
-with tab4:
+with tab5:
     st.subheader("📜 Execution History & Logs")
     if st.button("🔄 Refresh Logs"): pass
     try:
