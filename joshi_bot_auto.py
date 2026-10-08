@@ -69,7 +69,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Milliseconds Execution)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Live Balance Tracking)")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -89,14 +89,14 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "Multi-Threaded Ready", "Active")
+        st.metric("Engine Status", "Live Balance Active", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
 st.markdown("---")
 
 # Main Interface Tabs
-tab1, tab2, tab3 = st.tabs(["👥 Client Manager & Fast Auto-Login", "📊 Ultra-Fast Execution Terminal", "📜 Trade Logs"])
+tab1, tab2, tab3, tab4 = st.tabs(["👥 Client Manager & Fast Login", "💰 Live Balances", "📊 Ultra-Fast Execution Terminal", "📜 Trade Logs"])
 
 with tab1:
     col_m1, col_m2 = st.columns(2)
@@ -127,8 +127,8 @@ with tab1:
                     st.warning("Client ID aur API Key zaroori hai!")
 
     with col_m2:
-        st.subheader("🚀 Parallel Auto-Login (Fast 24-hr Refresh)")
-        st.info("Yeh multi-threaded login engine ek sath saare accounts ko milliseconds me authenticate kar dega.")
+        st.subheader("🚀 Parallel Auto-Login")
+        st.info("Multi-threaded login engine jo saare accounts ko ek sath authenticate karega.")
         
         if st.button("⚡ Parallel Login All 1000+ Clients"):
             cursor = db_conn.cursor()
@@ -156,7 +156,6 @@ with tab1:
                 progress_text = st.empty()
                 progress_text.text("Logging in accounts concurrently...")
                 
-                # Using ThreadPoolExecutor for fast parallel login
                 with ThreadPoolExecutor(max_workers=50) as executor:
                     futures = [executor.submit(login_client, row) for row in all_rows]
                     for future in as_completed(futures):
@@ -190,6 +189,43 @@ with tab1:
         pass
 
 with tab2:
+    st.subheader("💰 Live Master & Slave Account Balances")
+    st.write("Yahan aap saare connected accounts ka live margin aur net available balance ek click me dekh sakte hain.")
+    
+    if st.button("🔄 Fetch Live Balances (All Accounts)"):
+        all_accounts = []
+        for m in st.session_state.get('master_objs_bulk', []):
+            all_accounts.append({"id": m['id'], "type": "Master", "obj": m['obj']})
+        for s in st.session_state.get('slave_objs_bulk', []):
+            all_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+            
+        if not all_accounts:
+            st.warning("Pehle Tab 1 se accounts login/connect karein!")
+        else:
+            balance_results = []
+            
+            def fetch_balance(acc):
+                try:
+                    rms = acc['obj'].rmsLimit()
+                    if rms and rms.get('status'):
+                        data = rms.get('data', {})
+                        net = data.get('net', 'N/A')
+                        available_cash = data.get('availablecash', 'N/A')
+                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": net, "Available Cash": available_cash, "Status": "Success"}
+                    else:
+                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Error", "Available Cash": "Error", "Status": "Failed"}
+                except Exception as e:
+                    return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Exception", "Available Cash": str(e), "Status": "Failed"}
+
+            with ThreadPoolExecutor(max_workers=50) as executor:
+                futures = [executor.submit(fetch_balance, acc) for acc in all_accounts]
+                for f in as_completed(futures):
+                    balance_results.append(f.result())
+            
+            df_balances = pd.DataFrame(balance_results)
+            st.dataframe(df_balances, use_container_width=True)
+
+with tab3:
     st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
     exec_col1, exec_col2 = st.columns(2)
     
@@ -216,7 +252,6 @@ with tab2:
                     "squareoff": "0", "stoploss": "0", "quantity": str(qty)
                 }
                 
-                # Helper function to place order in background thread
                 def place_single_order(client_item, acc_type):
                     try:
                         res = client_item["obj"].placeOrder(order_params)
@@ -229,7 +264,6 @@ with tab2:
                 status_container = st.empty()
                 status_container.text("🚀 Executing master and broadcasting to all slaves simultaneously...")
 
-                # 1. Execute Master orders first
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     for master in st.session_state['master_objs_bulk']:
@@ -242,7 +276,6 @@ with tab2:
                         else:
                             st.error(f"Master ({m_id}) Error: {m_res}")
 
-                # 2. Mirror instantly to all Slave accounts concurrently using ThreadPoolExecutor (Max Workers = 100 for millisecond speed)
                 slave_futures = []
                 with ThreadPoolExecutor(max_workers=100) as executor:
                     for slave in st.session_state['slave_objs_bulk']:
@@ -262,7 +295,7 @@ with tab2:
             else:
                 st.warning("Pehle accounts connect karein!")
 
-with tab3:
+with tab4:
     st.subheader("📜 Execution History & Logs")
     if st.button("🔄 Refresh Logs"): pass
     try:
