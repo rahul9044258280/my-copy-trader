@@ -69,7 +69,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         pass
 
 # App Header & Live Market Bar
-st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (P&L & Balance Tracking)")
+st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal (Control Center)")
 
 ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
 try:
@@ -89,13 +89,13 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "P&L Module Active", "Active")
+        st.metric("Engine Status", "Control Panel Active", "Active")
 except Exception:
     st.metric("Market Data", "Connecting...", "-")
 
 st.markdown("---")
 
-# Main Interface Tabs (Added P&L Tab)
+# Main Interface Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "👥 Client Manager & Fast Login", 
     "💰 Live Balances", 
@@ -244,7 +244,6 @@ with tab3:
     if st.button("📊 Generate P&L Report"):
         try:
             cursor = db_conn.cursor()
-            # Query logs filtered by date range
             query = """
                 SELECT client_id, account_type, symbol, action, qty, status, timestamp 
                 FROM logs 
@@ -258,7 +257,6 @@ with tab3:
                 st.markdown("### 📋 Filtered Execution & Performance Records")
                 st.dataframe(df_pnl, use_container_width=True)
                 
-                # Summary metrics per client ID
                 st.markdown("### 📊 Summary per Client ID")
                 summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
                 st.dataframe(summary_df, use_container_width=True)
@@ -268,6 +266,24 @@ with tab3:
             st.error(f"Error generating report: {pnl_err}")
 
 with tab4:
+    st.subheader("🎛️ Control & Operations Center")
+    
+    # 3 Control Buttons added as requested from reference image
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
+    with ctrl_col1:
+        if st.button("▶ START COPY TRADING"):
+            st.success("Copy Trading Engine Activated!")
+            st.session_state['engine_running'] = True
+    with ctrl_col2:
+        if st.button("🛑 STOP ENGINE"):
+            st.warning("Copy Trading Engine Paused/Stopped.")
+            st.session_state['engine_running'] = False
+    with ctrl_col3:
+        if st.button("🚨 EMERGENCY KILL SWITCH"):
+            st.error("EMERGENCY KILL SWITCH ACTIVATED! All operations halted.")
+            st.session_state['engine_running'] = False
+
+    st.markdown("---")
     st.subheader("⚡ Master Order Execution & Ultra-Fast Mirroring")
     exec_col1, exec_col2 = st.columns(2)
     
@@ -283,10 +299,14 @@ with tab4:
         st.markdown("### 📋 System Readiness")
         active_masters = len(st.session_state.get('master_objs_bulk', []))
         active_slaves = len(st.session_state.get('slave_objs_bulk', []))
-        st.info(f"**Target Symbol:** {symbol}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
+        engine_state = st.session_state.get('engine_running', True)
+        
+        st.info(f"**Engine State:** {'Running 🟢' if engine_state else 'Stopped 🔴'}\n\n**Target Symbol:** {symbol}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
         
         if st.button("🔥 FIRE ULTRA-FAST COPY TRADE"):
-            if active_masters > 0 and active_slaves > 0:
+            if not engine_state:
+                st.error("Engine is currently stopped or kill switch is active! Start engine first.")
+            elif active_masters > 0 and active_slaves > 0:
                 order_params = {
                     "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": symbol_token,
                     "transactiontype": transaction_type, "exchange": "NSE", "ordertype": order_type,
