@@ -25,7 +25,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize SQLite Database
+# Initialize SQLite Database with Enhanced Columns for Slaves Control
 def init_db():
     conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -36,7 +36,9 @@ def init_db():
             password TEXT,
             totp_secret TEXT,
             api_key TEXT,
-            account_type TEXT
+            account_type TEXT,
+            is_active INTEGER DEFAULT 1,
+            lot_multiplier INTEGER DEFAULT 1
         )
     ''')
     cursor.execute('''
@@ -115,6 +117,7 @@ with tab1:
             new_totp = st.text_input("TOTP Secret Key (Google Auth Key)")
             new_api_key = st.text_input("API Key")
             new_acc_type = st.selectbox("Account Type", ["slave", "master"])
+            new_multiplier = st.number_input("Lot/Quantity Multiplier (Default: 1)", min_value=1, value=1)
             
             submit_client = st.form_submit_button("💾 Save Client to Database")
             if submit_client:
@@ -122,9 +125,9 @@ with tab1:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
-                            INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (new_client_id, new_password, new_totp, new_api_key, new_acc_type))
+                            INSERT OR REPLACE INTO clients (client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier)
+                            VALUES (?, ?, ?, ?, ?, 1, ?)
+                        ''', (new_client_id, new_password, new_totp, new_api_key, new_acc_type, new_multiplier))
                         db_conn.commit()
                         st.success(f"Client {new_client_id} successfully saved!")
                     except Exception as db_err:
@@ -134,27 +137,27 @@ with tab1:
 
     with col_m2:
         st.subheader("🚀 Parallel Auto-Login")
-        st.info("Multi-threaded login engine jo saare accounts ko ek sath authenticate karega.")
+        st.info("Multi-threaded login engine jo saare active accounts ko ek sath authenticate karega.")
         
         if st.button("⚡ Parallel Login All 1000+ Clients"):
             cursor = db_conn.cursor()
-            cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type FROM clients")
+            cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
             all_rows = cursor.fetchall()
             
             if not all_rows:
-                st.warning("Pehle clients database me add karein!")
+                st.warning("Pehle active clients database me add karein!")
             else:
                 master_objs = []
                 slave_objs = []
                 
                 def login_client(row):
                     try:
-                        c_id, pwd, totp_sec, api_k, acc_type = row
+                        c_id, pwd, totp_sec, api_k, acc_type, active, mult = row
                         totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
                         smart_obj = SmartConnect(api_key=api_k)
                         session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
                         if session_data and session_data.get('status'):
-                            return {"obj": smart_obj, "id": c_id, "type": acc_type}
+                            return {"obj": smart_obj, "id": c_id, "type": acc_type, "multiplier": mult}
                     except Exception:
                         pass
                     return None
@@ -170,29 +173,53 @@ with tab1:
                             if res['type'] == 'master':
                                 master_objs.append({"obj": res['obj'], "id": res['id']})
                             else:
-                                slave_objs.append({"obj": res['obj'], "id": res['id']})
+                                slave_objs.append({"obj": res['obj'], "id": res['id'], "multiplier": res['multiplier']})
                 
                 st.session_state['master_objs_bulk'] = master_objs
                 st.session_state['slave_objs_bulk'] = slave_objs
                 progress_text.empty()
-                st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Slaves: {len(slave_objs)}")
+                st.success(f"Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
 
-    st.markdown("### 📋 Saved Accounts Database List")
+    st.markdown("### 📋 Manage Saved Accounts & Individual Controls")
     try:
         cursor = db_conn.cursor()
-        cursor.execute("SELECT client_id, account_type, api_key FROM clients")
-        saved_clients = cursor.fetchall()
-        if saved_clients:
-            df_saved = pd.DataFrame(saved_clients, columns=["Client ID", "Account Type", "API Key"])
-            st.dataframe(df_saved, use_container_width=True)
-            
+        cursor.execute("SELECT id, client_id, account_type, api_key, is_active, lot_multiplier FROM clients")
+        all_db_clients = cursor.fetchall()
+        
+        if all_db_clients:
+            for row in all_db_clients:
+                db_id, c_id, acc_type, api_k, is_act, mult = row
+                
+                with st.expander(f"🔹 [{acc_type.upper()}] Client ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"):
+                    col_c1, col_c2, col_c3 = st.columns(3)
+                    
+                    with col_c1:
+                        new_act_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"status_{db_id}")
+                    with col_c2:
+                        new_mult_val = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"mult_{db_id}")
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        update_btn = st.button("💾 Update Settings", key=f"update_{db_id}")
+                        
+                    if update_btn:
+                        cursor.execute("UPDATE clients SET is_active = ?, lot_multiplier = ? WHERE id = ?", (new_act_status, new_mult_val, db_id))
+                        db_conn.commit()
+                        st.success(f"Settings updated for {c_id}!")
+                        st.rerun()
+                        
+                    if st.button(f"🗑️ Delete Client {c_id}", key=f"del_{db_id}"):
+                        cursor.execute("DELETE FROM clients WHERE id = ?", (db_id,))
+                        db_conn.commit()
+                        st.success(f"Client {c_id} deleted successfully!")
+                        st.rerun()
+                        
             if st.button("🗑️ Clear All Saved Accounts"):
                 cursor.execute("DELETE FROM clients")
                 db_conn.commit()
                 st.success("Saare accounts hata diye gaye hain!")
                 st.rerun()
-    except Exception:
-        pass
+    except Exception as e:
+        st.write(f"Error loading management panel: {e}")
 
 with tab2:
     st.subheader("💰 Live Master & Slave Account Balances")
@@ -268,27 +295,14 @@ with tab3:
 with tab4:
     st.subheader("🎛️ Control & Operations Center")
     
-    exec_col1, exec_col2 = st.columns(2)
+    active_masters = len(st.session_state.get('master_objs_bulk', []))
+    active_slaves = len(st.session_state.get('slave_objs_bulk', []))
+    engine_state = st.session_state.get('engine_running', False)
     
-    with exec_col1:
-        symbol = st.text_input("Trading Symbol", value="SBIN-EQ")
-        symbol_token = st.text_input("Symbol Token", value="3045")
-        qty = st.number_input("Quantity per Account", min_value=1, value=1)
-        transaction_type = st.selectbox("Action", ["BUY", "SELL"])
-        order_type = st.selectbox("Order Type", ["MARKET", "LIMIT"])
-        price = st.number_input("Limit Price", value=0.0)
-
-    with exec_col2:
-        st.markdown("### 📋 System Readiness")
-        active_masters = len(st.session_state.get('master_objs_bulk', []))
-        active_slaves = len(st.session_state.get('slave_objs_bulk', []))
-        engine_state = st.session_state.get('engine_running', False)
-        
-        st.info(f"**Engine State:** {'Running 🟢' if engine_state else 'Stopped 🔴'}\n\n**Target Symbol:** {symbol}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
+    st.info(f"**Engine State:** {'Running 🟢' if engine_state else 'Stopped 🔴'}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
 
     st.markdown("---")
     
-    # 3 Control Buttons (START COPY TRADING now executes the trade)
     ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
     
     with ctrl_col1:
@@ -298,29 +312,53 @@ with tab4:
             active_s = len(st.session_state.get('slave_objs_bulk', []))
             
             if active_m > 0 and active_s > 0:
-                order_params = {
-                    "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": symbol_token,
-                    "transactiontype": transaction_type, "exchange": "NSE", "ordertype": order_type,
-                    "producttype": "DELIVERY", "duration": "DAY", "price": str(price) if order_type == "LIMIT" else "0",
-                    "squareoff": "0", "stoploss": "0", "quantity": str(qty)
+                base_qty = 1
+                master_order_params = {
+                    "variety": "NORMAL", "tradingsymbol": "SBIN-EQ", "symboltoken": "3045",
+                    "transactiontype": "BUY", "exchange": "NSE", "ordertype": "MARKET",
+                    "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                    "squareoff": "0", "stoploss": "0", "quantity": str(base_qty)
                 }
                 
-                def place_single_order(client_item, acc_type):
+                def place_master_order(master):
                     try:
-                        res = client_item["obj"].placeOrder(order_params)
-                        log_trade(acc_type, client_item['id'], symbol, transaction_type, qty, "SUCCESS", res)
-                        return (True, client_item['id'], res)
+                        res = master["obj"].placeOrder(master_order_params)
+                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", res)
+                        return (True, master['id'], res)
                     except Exception as e:
-                        log_trade(acc_type, client_item['id'], symbol, transaction_type, qty, "FAILED", str(e))
-                        return (False, client_item['id'], str(e))
+                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
+                        return (False, master['id'], str(e))
+
+                def place_slave_order(slave):
+                    # Check from DB if slave is active (is_active == 1)
+                    try:
+                        cur = db_conn.cursor()
+                        cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
+                        row = cur.fetchone()
+                        if row and row[0] == 1:
+                            mult = row[1]
+                            final_qty = base_qty * mult
+                            
+                            slave_order_params = {
+                                "variety": "NORMAL", "tradingsymbol": "SBIN-EQ", "symboltoken": "3045",
+                                "transactiontype": "BUY", "exchange": "NSE", "ordertype": "MARKET",
+                                "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                                "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
+                            }
+                            res = slave["obj"].placeOrder(slave_order_params)
+                            log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", res)
+                            return (True, slave['id'], res)
+                    except Exception as e:
+                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
+                    return (False, slave['id'], "Skipped (Inactive or Error)")
 
                 status_container = st.empty()
-                status_container.text("🚀 Engine Started! Executing master and broadcasting to all slaves simultaneously...")
+                status_container.text("🚀 Engine Started! Executing master and broadcasting to individual active slaves with custom multipliers...")
 
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     for master in st.session_state['master_objs_bulk']:
-                        master_futures.append(executor.submit(place_single_order, master, "Master"))
+                        master_futures.append(executor.submit(place_master_order, master))
                     
                     for f in as_completed(master_futures):
                         success, m_id, m_res = f.result()
@@ -332,7 +370,7 @@ with tab4:
                 slave_futures = []
                 with ThreadPoolExecutor(max_workers=100) as executor:
                     for slave in st.session_state['slave_objs_bulk']:
-                        slave_futures.append(executor.submit(place_single_order, slave, "Slave"))
+                        slave_futures.append(executor.submit(place_slave_order, slave))
                     
                     success_slaves = 0
                     failed_slaves = 0
@@ -344,9 +382,9 @@ with tab4:
                             failed_slaves += 1
 
                 status_container.empty()
-                st.success(f"⚡ Copy Trade Executed! Successful Slaves: {success_slaves} | Failed Slaves: {failed_slaves}")
+                st.success(f"⚡ Copy Trade Executed! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
             else:
-                st.warning("Pehle Tab 1 se accounts connect karein!")
+                st.warning("Pehle Tab 1 से accounts connect karein!")
 
     with ctrl_col2:
         if st.button("🛑 STOP ENGINE"):
