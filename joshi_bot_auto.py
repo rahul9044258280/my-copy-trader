@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Page Configuration
 st.set_page_config(page_title="Angel One Ultra-Fast Copy Trading Terminal", layout="wide")
 
-# Custom Clean Dark Cinematic Theme
+# Custom Clean Dark Cinematic Theme & 3D Boxy Tabs Styling
 st.markdown("""
     <style>
     .main {background-color: #0e1117; color: #e0e0e0;}
@@ -22,6 +22,38 @@ st.markdown("""
     }
     .stButton>button:hover {background-color: #00b386; color: #ffffff;}
     .block-container {padding-top: 2rem;}
+
+    /* 3D Boxy Tabs Styling */
+    div[data-baseweb="tab-list"] {
+        gap: 12px;
+        background-color: #0e1117;
+        padding: 10px 0px;
+    }
+    div[data-baseweb="tab"] {
+        background-color: #161b22 !important;
+        border: 2px solid #30363d !important;
+        border-radius: 8px !important;
+        color: #c9d1d9 !important;
+        padding: 10px 20px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        transition: all 0.2s ease-in-out;
+    }
+    div[data-baseweb="tab"]:hover {
+        background-color: #21262d !important;
+        border-color: #00d09c !important;
+        color: #ffffff !important;
+        box-shadow: 0 6px 12px rgba(0, 208, 156, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        transform: translateY(-2px);
+    }
+    div[aria-selected="true"] {
+        background: linear-gradient(135deg, #00d09c 0%, #00a87e 100%) !important;
+        color: #0e1117 !important;
+        border-color: #00d09c !important;
+        font-weight: bold !important;
+        box-shadow: 0 4px 14px rgba(0, 208, 156, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.4) !important;
+        transform: translateY(-1px);
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -41,7 +73,6 @@ def init_db():
             lot_multiplier INTEGER DEFAULT 1
         )
     ''')
-    # Safe migration for existing tables
     try:
         cursor.execute("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1")
     except Exception:
@@ -107,12 +138,12 @@ except Exception:
 
 st.markdown("---")
 
-# Main Interface Tabs
+# Main Interface Tabs (Ultra-Fast Execution Terminal is now at No. 2 position)
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "👥 Client Manager & Fast Login", 
+    "📊 Ultra-Fast Execution Terminal", 
     "💰 Live Balances", 
     "📈 P&L Report (Date Range)", 
-    "📊 Ultra-Fast Execution Terminal", 
     "📜 Trade Logs"
 ])
 
@@ -257,78 +288,7 @@ with tab1:
         st.write(f"Error loading management panel: {e}")
 
 with tab2:
-    st.subheader("💰 Live Master & Slave Account Balances")
-    st.write("Yahan aap saare connected accounts ka live margin aur net available balance ek click me dekh sakte hain.")
-    
-    if st.button("🔄 Fetch Live Balances (All Accounts)"):
-        all_accounts = []
-        for m in st.session_state.get('master_objs_bulk', []):
-            all_accounts.append({"id": m['id'], "type": "Master", "obj": m['obj']})
-        for s in st.session_state.get('slave_objs_bulk', []):
-            all_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
-            
-        if not all_accounts:
-            st.warning("Pehle Tab 1 से accounts login/connect karein!")
-        else:
-            balance_results = []
-            
-            def fetch_balance(acc):
-                try:
-                    rms = acc['obj'].rmsLimit()
-                    if rms and rms.get('status'):
-                        data = rms.get('data', {})
-                        net = data.get('net', 'N/A')
-                        available_cash = data.get('availablecash', 'N/A')
-                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": net, "Available Cash": available_cash, "Status": "Success"}
-                    else:
-                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Error", "Available Cash": "Error", "Status": "Failed"}
-                except Exception as e:
-                    return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Exception", "Available Cash": str(e), "Status": "Failed"}
-
-            with ThreadPoolExecutor(max_workers=50) as executor:
-                futures = [executor.submit(fetch_balance, acc) for acc in all_accounts]
-                for f in as_completed(futures):
-                    balance_results.append(f.result())
-            
-            df_balances = pd.DataFrame(balance_results)
-            st.dataframe(df_balances, use_container_width=True)
-
-with tab3:
-    st.subheader("📈 Profit & Loss (P&L) Report with Date Range")
-    st.write("Har account ke execution logs aur trade performance ko diye gaye date range ke mutabiq analyze karein.")
-    
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        start_date = st.date_input("Start Date", value=date.today())
-    with col_d2:
-        end_date = st.date_input("End Date", value=date.today())
-        
-    if st.button("📊 Generate P&L Report"):
-        try:
-            cursor = db_conn.cursor()
-            query = """
-                SELECT client_id, account_type, symbol, action, qty, status, timestamp 
-                FROM logs 
-                WHERE date(timestamp) BETWEEN date(?) AND date(?)
-            """
-            cursor.execute(query, (str(start_date), str(end_date)))
-            rows = cursor.fetchall()
-            
-            if rows:
-                df_pnl = pd.DataFrame(rows, columns=["Client ID", "Account Type", "Symbol", "Action", "Qty", "Status", "Timestamp"])
-                st.markdown("### 📋 Filtered Execution & Performance Records")
-                st.dataframe(df_pnl, use_container_width=True)
-                
-                st.markdown("### 📊 Summary per Client ID")
-                summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
-                st.dataframe(summary_df, use_container_width=True)
-            else:
-                st.info("Chuni gayi date range me koi trade logs available nahi hain.")
-        except Exception as pnl_err:
-            st.error(f"Error generating report: {pnl_err}")
-
-with tab4:
-    st.subheader("🎛️ Control & Operations Center")
+    st.subheader("🎛️ Ultra-Fast Execution & Operations Center")
     
     active_masters = len(st.session_state.get('master_objs_bulk', []))
     active_slaves = len(st.session_state.get('slave_objs_bulk', []))
@@ -470,6 +430,77 @@ with tab4:
                 st.success("🚨 Emergency Exit Completed across all connected accounts!")
             else:
                 st.warning("Koi active accounts connected nahi hain!")
+
+with tab3:
+    st.subheader("💰 Live Master & Slave Account Balances")
+    st.write("Yahan aap saare connected accounts ka live margin aur net available balance ek click me dekh sakte hain.")
+    
+    if st.button("🔄 Fetch Live Balances (All Accounts)"):
+        all_accounts = []
+        for m in st.session_state.get('master_objs_bulk', []):
+            all_accounts.append({"id": m['id'], "type": "Master", "obj": m['obj']})
+        for s in st.session_state.get('slave_objs_bulk', []):
+            all_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+            
+        if not all_accounts:
+            st.warning("Pehle Tab 1 से accounts login/connect karein!")
+        else:
+            balance_results = []
+            
+            def fetch_balance(acc):
+                try:
+                    rms = acc['obj'].rmsLimit()
+                    if rms and rms.get('status'):
+                        data = rms.get('data', {})
+                        net = data.get('net', 'N/A')
+                        available_cash = data.get('availablecash', 'N/A')
+                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": net, "Available Cash": available_cash, "Status": "Success"}
+                    else:
+                        return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Error", "Available Cash": "Error", "Status": "Failed"}
+                except Exception as e:
+                    return {"Client ID": acc['id'], "Type": acc['type'], "Net Balance": "Exception", "Available Cash": str(e), "Status": "Failed"}
+
+            with ThreadPoolExecutor(max_workers=50) as executor:
+                futures = [executor.submit(fetch_balance, acc) for acc in all_accounts]
+                for f in as_completed(futures):
+                    balance_results.append(f.result())
+            
+            df_balances = pd.DataFrame(balance_results)
+            st.dataframe(df_balances, use_container_width=True)
+
+with tab4:
+    st.subheader("📈 Profit & Loss (P&L) Report with Date Range")
+    st.write("Har account ke execution logs aur trade performance ko diye gaye date range ke mutabiq analyze karein.")
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        start_date = st.date_input("Start Date", value=date.today())
+    with col_d2:
+        end_date = st.date_input("End Date", value=date.today())
+        
+    if st.button("📊 Generate P&L Report"):
+        try:
+            cursor = db_conn.cursor()
+            query = """
+                SELECT client_id, account_type, symbol, action, qty, status, timestamp 
+                FROM logs 
+                WHERE date(timestamp) BETWEEN date(?) AND date(?)
+            """
+            cursor.execute(query, (str(start_date), str(end_date)))
+            rows = cursor.fetchall()
+            
+            if rows:
+                df_pnl = pd.DataFrame(rows, columns=["Client ID", "Account Type", "Symbol", "Action", "Qty", "Status", "Timestamp"])
+                st.markdown("### 📋 Filtered Execution & Performance Records")
+                st.dataframe(df_pnl, use_container_width=True)
+                
+                st.markdown("### 📊 Summary per Client ID")
+                summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
+                st.dataframe(summary_df, use_container_width=True)
+            else:
+                st.info("Chuni gayi date range me koi trade logs available nahi hain.")
+        except Exception as pnl_err:
+            st.error(f"Error generating report: {pnl_err}")
 
 with tab5:
     st.subheader("📜 Execution History & Logs")
