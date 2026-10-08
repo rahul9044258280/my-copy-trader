@@ -1,178 +1,212 @@
 import streamlit as st
-import hmac
-import hashlib
-import time
-import requests
-import json
+from SmartApi import SmartConnect
+import pyotp
+import yfinance as yf
+import pandas as pd
+import sqlite3
 from datetime import datetime
 
-st.set_page_config(page_title="Joshi Strangle Paper Trading Bot", layout="centered")
+# Page Configuration
+st.set_page_config(page_title="Angel One Copy Trading Terminal", layout="wide", initial_sidebar_state="expanded")
 
-st.title("⚡ Joshi Delta Exchange Paper Trading Bot (Ultra-Fast)")
-st.write("Ye bot lightning-fast speed se testnet par options scan karke orders execute karega.")
+# Custom Groww-inspired Dark Theme Styling
+st.markdown("""
+    <style>
+    .main {background-color: #0e1117; color: #e0e0e0;}
+    .sidebar .sidebar-content {background-color: #161b22;}
+    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>select {
+        background-color: #21262d; color: #ffffff; border: 1px solid #30363d; border-radius: 6px;
+    }
+    .stButton>button {
+        background-color: #00d09c; color: #0e1117; font-weight: bold; border-radius: 6px; border: none; width: 100%;
+    }
+    .stButton>button:hover {background-color: #00b386; color: #ffffff;}
+    .metric-card {
+        background-color: #161b22; padding: 15px; border-radius: 8px; border: 1px solid #30363d; text-align: center;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- SIDEBAR: TESTNET API CREDENTIALS ---
-st.sidebar.header("Delta Testnet API Settings")
-api_key_input = st.sidebar.text_input("Testnet API Key", type="password")
-api_secret_input = st.sidebar.text_input("Testnet API Secret", type="password")
+# Initialize SQLite Database for Logging
+def init_db():
+    conn = sqlite3.connect('trade_logs.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            account_type TEXT,
+            client_id TEXT,
+            symbol TEXT,
+            action TEXT,
+            qty INTEGER,
+            status TEXT,
+            order_id TEXT
+        )
+    ''')
+    conn.commit()
+    return conn
 
-base_url = "https://testnet-api.delta.exchange"
-public_url = "https://api.delta.exchange"
+db_conn = init_db()
 
-lot_size = st.sidebar.number_input("Paper Order Quantity / Lots", min_value=1, value=10, step=1)
-# Max Premium Limit ab 100+ yani $500 tak set hai
-max_premium = st.sidebar.slider("Max Premium Limit ($)", min_value=10.0, max_value=500.0, value=100.0, step=10.0)
+def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
+    cursor = db_conn.cursor()
+    cursor.execute('''
+        INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), account_type, client_id, symbol, action, qty, status, str(order_id)))
+    db_conn.commit()
 
-def get_delta_signature(method, endpoint, payload_str=''):
-    timestamp = str(int(time.time()))
-    signature_data = timestamp + method + endpoint + payload_str
-    signature = hmac.new(
-        api_secret_input.encode('utf-8'),
-        signature_data.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    return timestamp, signature
+# Live Ticker Bar using yfinance
+st.markdown("### 📊 Live Market Ticker")
+ticker_col1, ticker_col2, ticker_col3 = st.columns(3)
+try:
+    nifty = yf.Ticker("^NSEI").history(period="1d")
+    banknifty = yf.Ticker("^NSEBANK").history(period="1d")
+    
+    nifty_price = nifty['Close'].iloc[-1] if not nifty.empty else 0.0
+    nifty_prev = nifty['Open'].iloc[0] if not nifty.empty else 0.0
+    nifty_chg = nifty_price - nifty_prev
+    
+    bank_price = banknifty['Close'].iloc[-1] if not banknifty.empty else 0.0
+    bank_prev = banknifty['Open'].iloc[0] if not banknifty.empty else 0.0
+    bank_chg = bank_price - bank_prev
 
-def get_current_btc_price():
-    for u in [base_url, public_url]:
-        try:
-            endpoint = "/v2/tickers"
-            response = requests.get(u + endpoint, timeout=3)
-            res_data = response.json()
-            if res_data.get("success"):
-                for ticker in res_data.get('result', []):
-                    sym = ticker.get('symbol', '')
-                    if 'BTC' in sym and ('USD' in sym or 'USDT' in sym):
-                        val = float(ticker.get('close', 0) or ticker.get('spot_price', 0))
-                        if val > 0:
-                            return val
-        except:
-            continue
-    return 86000.0
+    with ticker_col1:
+        st.metric("NIFTY 50", f"₹{nifty_price:,.2f}", f"{nifty_chg:+.2f}")
+    with ticker_col2:
+        st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
+    with ticker_col3:
+        st.metric("Terminal Status", "Active", "Connected")
+except Exception:
+    st.info("Live market ticker loading...")
 
-def get_best_options_ultra_fast(target_premium_max=100.0):
+st.markdown("---")
+
+# Sidebar - Centralized Configuration
+st.sidebar.header("🔐 Broker Credentials")
+
+st.sidebar.subheader("👑 Master Account")
+master_api_key = st.sidebar.text_input("Master API Key", type="password")
+master_client_id = st.sidebar.text_input("Master Client ID")
+master_pwd = st.sidebar.text_input("Master MPIN", type="password")
+master_totp_key = st.sidebar.text_input("Master TOTP Secret", type="password")
+
+st.sidebar.subheader("👥 Slave Accounts")
+num_slaves = st.sidebar.number_input("Number of Slave Accounts", min_value=1, max_value=5, value=1)
+
+slave_configs = []
+for i in range(num_slaves):
+    st.sidebar.markdown(f"---")
+    st.sidebar.markdown(f"**Slave Account {i+1}**")
+    s_key = st.sidebar.text_input(f"Slave {i+1} API Key", key=f"s_key_{i}", type="password")
+    s_id = st.sidebar.text_input(f"Slave {i+1} Client ID", key=f"s_id_{i}")
+    s_pwd = st.sidebar.text_input(f"Slave {i+1} MPIN", key=f"s_pwd_{i}", type="password")
+    s_totp = st.sidebar.text_input(f"Slave {i+1} TOTP Secret", key=f"s_totp_{i}", type="password")
+    slave_configs.append({"api_key": s_key, "client_id": s_id, "pwd": s_pwd, "totp": s_totp})
+
+# Connect Button
+if st.sidebar.button("🚀 Connect All Accounts"):
     try:
-        # Step 1: Ek hi call mein saare products aur tickers ek saath uthao (Super Fast)
-        prod_res = requests.get(base_url + "/v2/products", timeout=5).json()
-        if not prod_res.get("success"):
-            prod_res = requests.get(public_url + "/v2/products", timeout=5).json()
+        # Master Connection
+        if master_api_key and master_client_id:
+            totp_gen = pyotp.TOTP(master_totp_key).now() if master_totp_key else ""
+            obj_master = SmartConnect(api_key=master_api_key)
+            data_master = obj_master.generateSession(master_client_id, master_pwd, totp_gen)
             
-        tick_res = requests.get(base_url + "/v2/tickers", timeout=5).json()
-        if not tick_res.get("success"):
-            tick_res = requests.get(public_url + "/v2/tickers", timeout=5).json()
-            
-        if not prod_res.get("success") or not tick_res.get("success"):
-            st.error("Market data fetch karne mein error aaya.")
-            return None, None
-
-        # Tickers ko product_id ke hisaab se map kar lo dictionary mein
-        ticker_map = {}
-        for t in tick_res.get('result', []):
-            pid = t.get('product_id')
-            if pid:
-                ticker_map[int(pid)] = float(t.get('ask', 0) or t.get('close', 0) or 0)
-
-        call_options = []
-        put_options = []
-
-        # Step 2: Local loop mein bina kisi delay ke instant filter karo
-        for product in prod_res.get('result', []):
-            contract_type = str(product.get('contract_type', '')).lower()
-            symbol = str(product.get('symbol', '')).upper()
-            prod_id = product.get('id')
-            
-            if prod_id and ('call' in contract_type or 'put' in contract_type or 'option' in contract_type):
-                if 'BTC' in symbol:
-                    ask_price = ticker_map.get(int(prod_id), 0)
-                    if ask_price > 0:
-                        is_call = 'call' in contract_type or 'c' in symbol.split('-')[-1].lower()
-                        opt_data = {"id": prod_id, "symbol": symbol, "ask": ask_price}
-                        
-                        if is_call:
-                            call_options.append(opt_data)
-                        else:
-                            put_options.append(opt_data)
-
-        # Sort by price (sabase saste options pehle)
-        call_options = sorted(call_options, key=lambda x: x['ask'])
-        put_options = sorted(put_options, key=lambda x: x['ask'])
-
-        # Best Call selection (limit ke andar ya jo available ho)
-        best_call = None
-        for c in call_options:
-            if c['ask'] <= target_premium_max:
-                best_call = c
-                break
-        if not best_call and call_options:
-            best_call = call_options[0] # Fallback to cheapest available
-
-        # Best Put selection
-        best_put = None
-        for p in put_options:
-            if p['ask'] <= target_premium_max:
-                best_put = p
-                break
-        if not best_put and put_options:
-            best_put = put_options[0] # Fallback to cheapest available
-
-        return best_call, best_put
-
-    except Exception as e:
-        st.error(f"Ultra-fast scanning error: {e}")
-        return None, None
-
-def place_order(product_id, size, side):
-    endpoint = "/v2/orders"
-    payload = {
-        "product_id": int(product_id),
-        "size": int(size),
-        "side": side.lower(),
-        "order_type": "market"
-    }
-    payload_str = json.dumps(payload)
-    timestamp, signature = get_delta_signature("POST", endpoint, payload_str)
-    
-    headers = {
-        "api-key": api_key_input,
-        "signature": signature,
-        "timestamp": timestamp,
-        "Content-Type": "application/json"
-    }
-    
-    response = requests.post(base_url + endpoint, data=payload_str, headers=headers)
-    return response.json()
-
-def run_strategy_cycle():
-    if not api_key_input or not api_secret_input:
-        st.warning("Kripya sidebar mein Testnet API keys enter karein.")
-        return
-    
-    start_time = time.time()
-    with st.spinner("⚡ Ultra-fast market scanning and order execution..."):
-        call_opt, put_opt = get_best_options_ultra_fast(target_premium_max=max_premium)
+            if data_master and data_master.get('status'):
+                st.session_state['master_obj'] = obj_master
+                st.session_state['master_id'] = master_client_id
+                st.sidebar.success("Master Connected Successfully!")
+            else:
+                st.sidebar.error("Master Login Failed: Check credentials")
         
-        if call_opt:
-            st.success(f"Found Call: {call_opt['symbol']} @ ${call_opt['ask']}")
-            res_call = place_order(call_opt['id'], size=lot_size, side="buy")
-            st.json(res_call)
+        # Slaves Connection
+        st.session_state['slave_objs'] = []
+        for idx, slave in enumerate(slave_configs):
+            if slave["api_key"] and slave["client_id"]:
+                s_totp_gen = pyotp.TOTP(slave["totp"]).now() if slave["totp"] else ""
+                obj_slave = SmartConnect(api_key=slave["api_key"])
+                data_slave = obj_slave.generateSession(slave["client_id"], slave["pwd"], s_totp_gen)
+                
+                if data_slave and data_slave.get('status'):
+                    st.session_state['slave_objs'].append({"obj": obj_slave, "id": slave["client_id"]})
+                    st.sidebar.success(f"Slave {idx+1} Connected!")
+                else:
+                    st.sidebar.error(f"Slave {idx+1} Failed: Check credentials")
+                    
+    except Exception as e:
+        st.sidebar.error(f"Connection Error: {e}")
+
+# Main Trading Terminal Interface
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("⚡ Master Order Execution")
+    symbol = st.text_input("Trading Symbol (e.g., SBIN-EQ)", value="SBIN-EQ")
+    symbol_token = st.text_input("Symbol Token", value="3045")
+    qty = st.number_input("Quantity", min_value=1, value=1)
+    transaction_type = st.selectbox("Action", ["BUY", "SELL"])
+    order_type = st.selectbox("Order Type", ["MARKET", "LIMIT"])
+    price = st.number_input("Limit Price", value=0.0)
+
+    if st.button("🔥 Execute Master & Copy to Slaves"):
+        if 'master_obj' in st.session_state and 'slave_objs' in st.session_state:
+            try:
+                order_params = {
+                    "variety": "NORMAL",
+                    "tradingsymbol": symbol,
+                    "symboltoken": symbol_token,
+                    "transactiontype": transaction_type,
+                    "exchange": "NSE",
+                    "ordertype": order_type,
+                    "producttype": "DELIVERY",
+                    "duration": "DAY",
+                    "price": str(price) if order_type == "LIMIT" else "0",
+                    "squareoff": "0",
+                    "stoploss": "0",
+                    "quantity": str(qty)
+                }
+                
+                # Execute Master Order
+                master_res = st.session_state['master_obj'].placeOrder(order_params)
+                st.success(f"Master Order Executed! ID: {master_res}")
+                log_trade("Master", st.session_state['master_id'], symbol, transaction_type, qty, "SUCCESS", master_res)
+                
+                # Mirror to Slaves
+                for slave in st.session_state['slave_objs']:
+                    try:
+                        slave_res = slave["obj"].placeOrder(order_params)
+                        st.info(f"Copied to Slave ({slave['id']}) | ID: {slave_res}")
+                        log_trade("Slave", slave["id"], symbol, transaction_type, qty, "SUCCESS", slave_res)
+                    except Exception as se:
+                        st.error(f"Slave {slave['id']} Error: {se}")
+                        log_trade("Slave", slave["id"], symbol, transaction_type, qty, "FAILED", str(se))
+                        
+            except Exception as me:
+                st.error(f"Master Order Failed: {me}")
+                log_trade("Master", st.session_state.get('master_id', 'N/A'), symbol, transaction_type, qty, "FAILED", str(me))
         else:
-            st.warning("Koi Call option nahi mila.")
-            
-        if put_opt:
-            st.success(f"Found Put: {put_opt['symbol']} @ ${put_opt['ask']}")
-            res_put = place_order(put_opt['id'], size=lot_size, side="buy")
-            st.json(res_put)
-        else:
-            st.warning("Koi Put option nahi mila.")
-            
-        elapsed = time.time() - start_time
-        st.info(f"⚡ Scan & Execute completed in {elapsed:.2f} seconds!")
+            st.warning("Pehle sidebar se saare accounts connect kijiye!")
 
-# --- UI DISPLAY ---
-btc_price = get_current_btc_price()
-st.metric(label="Live Testnet BTC Price (USD)", value=f"${btc_price}")
+with col2:
+    st.subheader("📈 Live Position & Status Monitor")
+    st.info("Real-time orders aur account synchronization logs yahan update honge.")
+    
+    if st.button("🔄 Refresh Logs"):
+        pass
 
-st.info("Bot fully optimized hai. Instant paper trade execute karne ke liye button dabayein.")
-
-if st.button("🚀 Run Ultra-Fast Strategy Now"):
-    run_strategy_cycle()
+# Trade Logs History Section
+st.markdown("---")
+st.subheader("📜 Execution History & Logs")
+try:
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT timestamp, account_type, client_id, symbol, action, qty, status, order_id FROM logs ORDER BY id DESC LIMIT 10")
+    rows = cursor.fetchall()
+    if rows:
+        df_logs = pd.DataFrame(rows, columns=["Timestamp", "Type", "Client ID", "Symbol", "Action", "Qty", "Status", "Order ID"])
+        st.dataframe(df_logs, use_container_width=True)
+    else:
+        st.write("Abhi tak koi trade execute nahi hua hai.")
+except Exception:
+    st.write("Log data fetch karne me error aaya.")
