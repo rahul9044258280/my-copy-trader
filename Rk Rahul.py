@@ -425,7 +425,7 @@ with tab2:
                                     "qty": abs(netq),
                                     "transactiontype": "BUY" if netq > 0 else "SELL",
                                     "exchange": correct_exchange,
-                                    "producttype": p.get('producttype', 'CARRYFORWARD') # Options ke liye CARRYFORWARD ya INTRADAY
+                                    "producttype": "CARRYFORWARD"
                                 })
                 except Exception as e:
                     st.error(f"Error fetching master positions: {e}")
@@ -433,21 +433,42 @@ with tab2:
                 if not open_positions:
                     st.warning("⚠️ Master account me koi open position nahi mili! Pehle Master me manual trade lo.")
                 else:
-                    def copy_position_to_slave(slave, pos):
+                    def copy_position_to_slave(slave_item, pos):
                         try:
+                            s_id = slave_item['id']
+                            slave_obj = slave_item['obj']
+                            
+                            # 🛠️ Session Re-Validation Check: Ensure slave session is alive
+                            try:
+                                slave_obj.rmsLimit()
+                            except Exception:
+                                # Re-login slave automatically if session expired
+                                t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+                                cur = t_conn.cursor()
+                                cur.execute("SELECT password, totp_secret, api_key FROM clients WHERE client_id = ?", (s_id,))
+                                s_row = cur.fetchone()
+                                t_conn.close()
+                                if s_row:
+                                    pwd, totp_sec, api_k = s_row
+                                    totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
+                                    new_s_obj = SmartConnect(api_key=api_k)
+                                    s_sess = new_s_obj.generateSession(s_id, pwd, totp_gen)
+                                    if s_sess and s_sess.get('status'):
+                                        slave_obj = new_s_obj
+                                        slave_item['obj'] = new_s_obj
+
                             t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
                             cur = t_conn.cursor()
-                            cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
+                            cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (s_id,))
                             row = cur.fetchone()
                             t_conn.close()
 
                             is_act = row[0] if row else 1
-                            mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
+                            mult = row[1] if row and len(row) > 1 else slave_item.get('multiplier', 1)
 
                             if is_act == 1:
                                 final_qty = pos['qty'] * mult
                                 
-                                # Options order params for Angel One SmartAPI
                                 slave_order_params = {
                                     "variety": "NORMAL", 
                                     "tradingsymbol": pos['tradingsymbol'], 
@@ -455,7 +476,7 @@ with tab2:
                                     "transactiontype": pos['transactiontype'], 
                                     "exchange": pos['exchange'], 
                                     "ordertype": "MARKET",
-                                    "producttype": "CARRYFORWARD", # Options ke liye CARRYFORWARD (NRML)
+                                    "producttype": "CARRYFORWARD", 
                                     "duration": "DAY", 
                                     "price": "0",
                                     "squareoff": "0", 
@@ -463,22 +484,21 @@ with tab2:
                                     "quantity": str(final_qty)
                                 }
                                 
-                                res = slave["obj"].placeOrder(slave_order_params)
+                                res = slave_obj.placeOrder(slave_order_params)
                                 
-                                # Detailed debug capture for inspection
-                                if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                                if res and isinstance(res, dict) and (res.get('status'] == True or 'data' in res):
                                     order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
-                                    return (True, slave['id'], order_id)
+                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
+                                    return (True, s_id, order_id)
                                 else:
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg} | Full: {res}", "None")
-                                    return (False, slave['id'], f"{err_msg} (Raw: {res})")
+                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg} | Full: {res}", "None")
+                                    return (False, s_id, f"{err_msg} (Raw: {res})")
                             else:
-                                return (False, slave['id'], "Skipped (Inactive)")
+                                return (False, s_id, "Skipped (Inactive)")
                         except Exception as e:
-                            log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], pos['qty'], f"FAIL: {str(e)}", "None")
-                            return (False, slave['id'], str(e))
+                            log_trade("Slave", slave_item['id'], pos['tradingsymbol'], pos['transactiontype'], pos['qty'], f"FAIL: {str(e)}", "None")
+                            return (False, slave_item['id'], str(e))
 
                     status_container = st.empty()
                     status_container.text("⚡ Mirroring master open positions to all active slaves concurrently...")
