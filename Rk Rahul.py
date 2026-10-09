@@ -456,7 +456,7 @@ with tab2:
             
     with ctrl_col3:
         if st.button("🚨 EMERGENCY KILL SWITCH"):
-            st.error("🚨 KILL SWITCH ACTIVATED! Safely exiting all open positions across all accounts...")
+            st.error("🚨 MILLISECOND KILL SWITCH ACTIVATED! Exiting all open positions across all accounts in parallel threads...")
             st.session_state['engine_running'] = False
             
             all_accounts_kill = []
@@ -465,10 +465,11 @@ with tab2:
             for s in st.session_state.get('slave_objs_bulk', []):
                 all_accounts_kill.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
                 
-            def square_off_account(acc):
+            def square_off_account_lightning(acc):
                 try:
                     positions = acc['obj'].position()
                     if positions and positions.get('status') and positions.get('data'):
+                        exits_placed = 0
                         for pos in positions['data']:
                             netqty = int(pos.get('netqty', 0))
                             if netqty != 0:
@@ -486,20 +487,25 @@ with tab2:
                                 }
                                 acc['obj'].placeOrder(sq_params)
                                 log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", "EXIT")
-                        return True
-                except Exception:
-                    pass
-                return False
+                                exits_placed += 1
+                        return (True, acc['id'], exits_placed)
+                except Exception as e:
+                    log_trade(acc['type'], acc['id'], "ALL", "KILL_SWITCH_ERR", 0, "FAILED", str(e))
+                return (False, acc['id'], 0)
 
             if all_accounts_kill:
-                with ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = [executor.submit(square_off_account, acc) for acc in all_accounts_kill]
+                # High-speed parallel thread execution (up to 100 concurrent workers for millisecond response)
+                with ThreadPoolExecutor(max_workers=100) as executor:
+                    futures = [executor.submit(square_off_account_lightning, acc) for acc in all_accounts_kill]
+                    total_exits = 0
                     for f in as_completed(futures):
                         try:
-                            f.result()
+                            success, aid, count = f.result()
+                            if success:
+                                total_exits += count
                         except Exception:
                             pass
-                st.success("🚨 Emergency Exit Completed Safely!")
+                st.success(f"🚨 Lightning Kill Switch Executed! Total Position Exits Triggered: {total_exits}")
             else:
                 st.warning("Koi active accounts connected nahi hain!")
 
