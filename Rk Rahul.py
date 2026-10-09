@@ -404,12 +404,11 @@ with tab2:
             active_s = len(st.session_state.get('slave_objs_bulk', []))
             
             if active_m > 0 and active_s > 0:
-                # 🛠️ FIXED: Dynamically fetch latest open position from Master account to copy actual symbol & token
                 master_obj = st.session_state['master_objs_bulk'][0]['obj']
-                master_id = st.session_state['master_objs_bulk'][0]['id']
                 
-                target_symbol = "SBIN-EQ"
-                target_token = "3045"
+                # Robust Master Order Detection
+                target_symbol = None
+                target_token = None
                 target_qty = 1
                 target_txn = "BUY"
                 
@@ -427,102 +426,105 @@ with tab2:
                 except Exception:
                     pass
 
-                master_order_params = {
-                    "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                    "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
-                    "producttype": "DELIVERY", "duration": "DAY", "price": "0",
-                    "squareoff": "0", "stoploss": "0", "quantity": str(target_qty)
-                }
-                
-                def place_master_order(master):
-                    try:
-                        res = master["obj"].placeOrder(master_order_params)
-                        if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
-                            order_id = res.get('data', {}).get('orderid', 'PLACED')
-                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, "SUCCESS", order_id)
-                            return (True, master['id'], order_id)
-                        else:
-                            err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {err_msg}", "None")
-                            return (False, master['id'], err_msg)
-                    except Exception as e:
-                        log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
-                        return (False, master['id'], str(e))
-
-                def place_slave_order(slave):
-                    try:
-                        t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
-                        cur = t_conn.cursor()
-                        cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
-                        row = cur.fetchone()
-                        t_conn.close()
-
-                        is_act = row[0] if row else 1
-                        mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
-
-                        if is_act == 1:
-                            final_qty = target_qty * mult
-                            slave_order_params = {
-                                "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                                "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
-                                "producttype": "DELIVERY", "duration": "DAY", "price": "0",
-                                "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
-                            }
-                            res = slave["obj"].placeOrder(slave_order_params)
-                            
+                if not target_symbol or not target_token:
+                    st.error("⚠️ Master account me koi bhi open position nahi mili! Pehle Master me ek position open karein ya manual trade lein.")
+                else:
+                    master_order_params = {
+                        "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
+                        "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
+                        "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                        "squareoff": "0", "stoploss": "0", "quantity": str(target_qty)
+                    }
+                    
+                    def place_master_order(master):
+                        try:
+                            res = master["obj"].placeOrder(master_order_params)
                             if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
                                 order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, "SUCCESS", order_id)
-                                return (True, slave['id'], order_id)
+                                log_trade("Master", master['id'], target_symbol, target_txn, target_qty, "SUCCESS", order_id)
+                                return (True, master['id'], order_id)
                             else:
                                 err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, f"FAIL: {err_msg}", "None")
-                                return (False, slave['id'], err_msg)
-                        else:
-                            return (False, slave['id'], "Skipped (Inactive)")
-                    except Exception as e:
-                        log_trade("Slave", slave['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
-                        return (False, slave['id'], str(e))
+                                log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {err_msg}", "None")
+                                return (False, master['id'], err_msg)
+                        except Exception as e:
+                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
+                            return (False, master['id'], str(e))
 
-                status_container = st.empty()
-                status_container.text(f"⚡ Copying {target_symbol} ({target_txn}) across accounts concurrently...")
-
-                master_futures = []
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    for master in st.session_state['master_objs_bulk']:
-                        master_futures.append(executor.submit(place_master_order, master))
-                    
-                    for f in as_completed(master_futures):
+                    def place_slave_order(slave):
                         try:
-                            success, m_id, m_res = f.result()
-                            if success:
-                                st.success(f"Master ({m_id}) Placed! Order ID/Res: {m_res}")
-                            else:
-                                st.error(f"Master ({m_id}) Error: {m_res}")
-                        except Exception:
-                            pass
+                            t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+                            cur = t_conn.cursor()
+                            cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
+                            row = cur.fetchone()
+                            t_conn.close()
 
-                slave_futures = []
-                with ThreadPoolExecutor(max_workers=100) as executor:
-                    for slave in st.session_state['slave_objs_bulk']:
-                        slave_futures.append(executor.submit(place_slave_order, slave))
-                    
-                    success_slaves = 0
-                    failed_slaves = 0
-                    for f in as_completed(slave_futures):
-                        try:
-                            success, s_id, s_msg = f.result()
-                            if success:
-                                success_slaves += 1
-                                st.success(f"Slave ({s_id}) Placed Successfully!")
+                            is_act = row[0] if row else 1
+                            mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
+
+                            if is_act == 1:
+                                final_qty = target_qty * mult
+                                slave_order_params = {
+                                    "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
+                                    "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
+                                    "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                                    "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
+                                }
+                                res = slave["obj"].placeOrder(slave_order_params)
+                                
+                                if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                                    order_id = res.get('data', {}).get('orderid', 'PLACED')
+                                    log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, "SUCCESS", order_id)
+                                    return (True, slave['id'], order_id)
+                                else:
+                                    err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
+                                    log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, f"FAIL: {err_msg}", "None")
+                                    return (False, slave['id'], err_msg)
                             else:
+                                return (False, slave['id'], "Skipped (Inactive)")
+                        except Exception as e:
+                            log_trade("Slave", slave['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
+                            return (False, slave['id'], str(e))
+
+                    status_container = st.empty()
+                    status_container.text(f"⚡ Copying {target_symbol} ({target_txn}) across accounts concurrently...")
+
+                    master_futures = []
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        for master in st.session_state['master_objs_bulk']:
+                            master_futures.append(executor.submit(place_master_order, master))
+                        
+                        for f in as_completed(master_futures):
+                            try:
+                                success, m_id, m_res = f.result()
+                                if success:
+                                    st.success(f"Master ({m_id}) Placed! Order ID/Res: {m_res}")
+                                else:
+                                    st.error(f"Master ({m_id}) Error: {m_res}")
+                            except Exception:
+                                pass
+
+                    slave_futures = []
+                    with ThreadPoolExecutor(max_workers=100) as executor:
+                        for slave in st.session_state['slave_objs_bulk']:
+                            slave_futures.append(executor.submit(place_slave_order, slave))
+                        
+                        success_slaves = 0
+                        failed_slaves = 0
+                        for f in as_completed(slave_futures):
+                            try:
+                                success, s_id, s_msg = f.result()
+                                if success:
+                                    success_slaves += 1
+                                    st.success(f"Slave ({s_id}) Placed Successfully!")
+                                else:
+                                    failed_slaves += 1
+                                    st.error(f"Slave ({s_id}) Failed: {s_msg}")
+                            except Exception:
                                 failed_slaves += 1
-                                st.error(f"Slave ({s_id}) Failed: {s_msg}")
-                        except Exception:
-                            failed_slaves += 1
 
-                status_container.empty()
-                st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Failed/Skipped Slaves: {failed_slaves}")
+                    status_container.empty()
+                    st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Failed/Skipped Slaves: {failed_slaves}")
             else:
                 st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
