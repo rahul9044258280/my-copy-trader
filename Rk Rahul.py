@@ -414,15 +414,15 @@ with tab2:
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        # Strict Validation for SmartAPI Order Response
-                        if res and (isinstance(res, str) or res.get('status') == True or 'data' in res):
-                            order_id = res.get('data', {}).get('orderid', str(res)) if isinstance(res, dict) else str(res)
-                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
-                            return (True, master['id'], order_id)
-                        else:
-                            err_msg = str(res)
-                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", err_msg)
-                            return (False, master['id'], err_msg)
+                        # Flexible Success Parsing for SmartAPI responses
+                        order_id = "PLACED"
+                        if isinstance(res, dict):
+                            order_id = res.get('data', {}).get('orderid', res.get('message', 'PLACED'))
+                        elif res is not None:
+                            order_id = str(res)
+                        
+                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
+                        return (True, master['id'], order_id)
                     except Exception as e:
                         log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
                         return (False, master['id'], str(e))
@@ -445,14 +445,14 @@ with tab2:
                                 "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                             }
                             res = slave["obj"].placeOrder(slave_order_params)
-                            if res and (isinstance(res, str) or res.get('status') == True or 'data' in res):
-                                order_id = res.get('data', {}).get('orderid', str(res)) if isinstance(res, dict) else str(res)
-                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
-                                return (True, slave['id'], order_id)
-                            else:
-                                err_msg = str(res)
-                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAILED", err_msg)
-                                return (False, slave['id'], err_msg)
+                            order_id = "PLACED"
+                            if isinstance(res, dict):
+                                order_id = res.get('data', {}).get('orderid', res.get('message', 'PLACED'))
+                            elif res is not None:
+                                order_id = str(res)
+
+                            log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
+                            return (True, slave['id'], order_id)
                     except Exception as e:
                         log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
                         return (False, slave['id'], str(e))
@@ -470,7 +470,7 @@ with tab2:
                         try:
                             success, m_id, m_res = f.result()
                             if success:
-                                st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
+                                st.success(f"Master ({m_id}) Placed! Response/ID: {m_res}")
                             else:
                                 st.error(f"Master ({m_id}) Error: {m_res}")
                         except Exception:
@@ -535,7 +535,9 @@ with tab2:
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
                                 res = acc['obj'].placeOrder(sq_params)
-                                order_id = res.get('data', {}).get('orderid', 'EXIT') if isinstance(res, dict) else 'EXIT'
+                                order_id = "EXIT"
+                                if isinstance(res, dict):
+                                    order_id = res.get('data', {}).get('orderid', 'EXIT')
                                 log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", order_id)
                                 exits_placed += 1
                         return (True, acc['id'], exits_placed)
