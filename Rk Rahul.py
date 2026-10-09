@@ -135,15 +135,15 @@ def init_db():
 db_conn = init_db()
 
 def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
-    if db_conn is None:
-        return
     try:
-        cursor = db_conn.cursor()
+        thread_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+        cursor = thread_conn.cursor()
         cursor.execute('''
             INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, status, str(order_id)))
-        db_conn.commit()
+        thread_conn.commit()
+        thread_conn.close()
     except Exception:
         pass
 
@@ -159,17 +159,18 @@ def background_heartbeat_monitor():
                         acc['obj'].rmsLimit()
                     except Exception:
                         try:
-                            if db_conn:
-                                cur = db_conn.cursor()
-                                cur.execute("SELECT password, totp_secret, api_key FROM clients WHERE client_id = ?", (acc['id'],))
-                                row = cur.fetchone()
-                                if row:
-                                    pwd, totp_sec, api_k = row
-                                    totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
-                                    new_obj = SmartConnect(api_key=api_k)
-                                    session_data = new_obj.generateSession(acc['id'], pwd, totp_gen)
-                                    if session_data and session_data.get('status'):
-                                        acc['obj'] = new_obj
+                            temp_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+                            cur = temp_conn.cursor()
+                            cur.execute("SELECT password, totp_secret, api_key FROM clients WHERE client_id = ?", (acc['id'],))
+                            row = cur.fetchone()
+                            temp_conn.close()
+                            if row:
+                                pwd, totp_sec, api_k = row
+                                totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
+                                new_obj = SmartConnect(api_key=api_k)
+                                session_data = new_obj.generateSession(acc['id'], pwd, totp_gen)
+                                if session_data and session_data.get('status'):
+                                    acc['obj'] = new_obj
                         except Exception:
                             pass
         except Exception:
@@ -414,7 +415,6 @@ with tab2:
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        # Flexible Success Parsing for SmartAPI responses
                         order_id = "PLACED"
                         if isinstance(res, dict):
                             order_id = res.get('data', {}).get('orderid', res.get('message', 'PLACED'))
@@ -429,15 +429,19 @@ with tab2:
 
                 def place_slave_order(slave):
                     try:
-                        if db_conn is None:
-                            return (False, slave['id'], "DB Error")
-                        cur = db_conn.cursor()
+                        # Thread-safe independent database connection for each thread execution
+                        t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+                        cur = t_conn.cursor()
                         cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
                         row = cur.fetchone()
-                        if row and row[0] == 1:
-                            mult = row[1]
+                        t_conn.close()
+
+                        # If row not found or active by default, proceed with multiplier
+                        is_act = row[0] if row else 1
+                        mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
+
+                        if is_act == 1:
                             final_qty = base_qty * mult
-                            
                             slave_order_params = {
                                 "variety": "NORMAL", "tradingsymbol": "SBIN-EQ", "symboltoken": "3045",
                                 "transactiontype": "BUY", "exchange": "NSE", "ordertype": "MARKET",
@@ -453,10 +457,11 @@ with tab2:
 
                             log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
                             return (True, slave['id'], order_id)
+                        else:
+                            return (False, slave['id'], "Skipped (Inactive)")
                     except Exception as e:
                         log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
                         return (False, slave['id'], str(e))
-                    return (False, slave['id'], "Skipped (Inactive)")
 
                 status_container = st.empty()
                 status_container.text("⚡ Ultra-Fast Execution Started! Broadcasting orders concurrently...")
