@@ -141,7 +141,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         cursor.execute('''
             INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, str(status)[:50], str(order_id)[:50]))
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, str(status)[:100], str(order_id)[:50]))
         thread_conn.commit()
         thread_conn.close()
     except Exception:
@@ -414,7 +414,6 @@ with tab2:
                             netq = int(p.get('netqty', 0))
                             if netq != 0:
                                 sym = p.get('tradingsymbol', '')
-                                # 🛠️ Robust Exchange Auto-Detection (NFO for Options/Futures, NSE for Equities)
                                 if "PE" in sym.upper() or "CE" in sym.upper() or "FUT" in sym.upper() or ("NIFTY" in sym.upper() and not sym.upper().endswith("-EQ")):
                                     correct_exchange = "NFO"
                                 else:
@@ -426,7 +425,7 @@ with tab2:
                                     "qty": abs(netq),
                                     "transactiontype": "BUY" if netq > 0 else "SELL",
                                     "exchange": correct_exchange,
-                                    "producttype": p.get('producttype', 'DELIVERY')
+                                    "producttype": p.get('producttype', 'CARRYFORWARD') # Options ke liye CARRYFORWARD ya INTRADAY
                                 })
                 except Exception as e:
                     st.error(f"Error fetching master positions: {e}")
@@ -447,23 +446,34 @@ with tab2:
 
                             if is_act == 1:
                                 final_qty = pos['qty'] * mult
+                                
+                                # Options order params for Angel One SmartAPI
                                 slave_order_params = {
-                                    "variety": "NORMAL", "tradingsymbol": pos['tradingsymbol'], "symboltoken": pos['symboltoken'],
-                                    "transactiontype": pos['transactiontype'], "exchange": pos['exchange'], "ordertype": "MARKET",
-                                    "producttype": pos['producttype'], "duration": "DAY", "price": "0",
-                                    "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
+                                    "variety": "NORMAL", 
+                                    "tradingsymbol": pos['tradingsymbol'], 
+                                    "symboltoken": pos['symboltoken'],
+                                    "transactiontype": pos['transactiontype'], 
+                                    "exchange": pos['exchange'], 
+                                    "ordertype": "MARKET",
+                                    "producttype": "CARRYFORWARD", # Options ke liye CARRYFORWARD (NRML)
+                                    "duration": "DAY", 
+                                    "price": "0",
+                                    "squareoff": "0", 
+                                    "stoploss": "0", 
+                                    "quantity": str(final_qty)
                                 }
+                                
                                 res = slave["obj"].placeOrder(slave_order_params)
                                 
+                                # Detailed debug capture for inspection
                                 if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
                                     order_id = res.get('data', {}).get('orderid', 'PLACED')
                                     log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
                                     return (True, slave['id'], order_id)
                                 else:
-                                    # Detailed error extraction
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
-                                    return (False, slave['id'], err_msg)
+                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg} | Full: {res}", "None")
+                                    return (False, slave['id'], f"{err_msg} (Raw: {res})")
                             else:
                                 return (False, slave['id'], "Skipped (Inactive)")
                         except Exception as e:
@@ -536,7 +546,7 @@ with tab2:
                                 sq_params = {
                                     "variety": "NORMAL", "tradingsymbol": symbol_name, "symboltoken": token,
                                     "transactiontype": tx_type, "exchange": sq_exchange, "ordertype": "MARKET",
-                                    "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
+                                    "producttype": "CARRYFORWARD", "duration": "DAY", 
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
                                 res = acc['obj'].placeOrder(sq_params)
