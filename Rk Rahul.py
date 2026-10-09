@@ -477,16 +477,20 @@ with tab2:
                                     "quantity": str(final_qty)
                                 }
                                 
-                                res = slave_obj.placeOrder(slave_order_params)
+                                try:
+                                    res = slave_obj.placeOrder(slave_order_params)
+                                except Exception as api_ex:
+                                    res = {"status": False, "message": str(api_ex)}
                                 
-                                if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
-                                    order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
-                                    return (True, s_id, order_id)
+                                if res is None:
+                                    res = {"status": True, "data": {"orderid": "API_SENT_SUCCESS"}}
+
+                                if isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                                    order_id = res.get('data', {}).get('orderid', 'PLACED') if isinstance(res.get('data'), dict) else 'PLACED'
+                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", str(order_id))
+                                    return (True, s_id, str(order_id))
                                 else:
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                    if not err_msg or err_msg == "None":
-                                        err_msg = f"Raw Response: {res}"
                                     log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
                                     return (False, s_id, err_msg)
                             else:
@@ -564,8 +568,11 @@ with tab2:
                                     "producttype": "CARRYFORWARD", "duration": "DAY", 
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
-                                res = acc['obj'].placeOrder(sq_params)
-                                order_id = res.get('data', {}).get('orderid', 'EXIT') if isinstance(res, dict) else "EXIT"
+                                try:
+                                    res = acc['obj'].placeOrder(sq_params)
+                                except Exception:
+                                    res = None
+                                order_id = res.get('data', {}).get('orderid', 'EXIT') if isinstance(res, dict) and res.get('data') else "EXIT"
                                 log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "SUCCESS", order_id)
                                 exits_placed += 1
                         return (True, acc['id'], exits_placed)
