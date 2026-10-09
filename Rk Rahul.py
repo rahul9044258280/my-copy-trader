@@ -483,12 +483,21 @@ with tab2:
                                     res = {"status": False, "message": str(api_ex)}
                                 
                                 if res is None:
-                                    res = {"status": True, "data": {"orderid": "API_SENT_SUCCESS"}}
+                                    err_msg = "Broker API returned None (Order rejected or failed)"
+                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
+                                    return (False, s_id, err_msg)
 
-                                if isinstance(res, dict) and (res.get('status') == True or 'data' in res):
-                                    order_id = res.get('data', {}).get('orderid', 'PLACED') if isinstance(res.get('data'), dict) else 'PLACED'
-                                    log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", str(order_id))
-                                    return (True, s_id, str(order_id))
+                                if isinstance(res, dict) and (res.get('status') == True or res.get('success') == True or 'data' in res):
+                                    order_data = res.get('data')
+                                    order_id = order_data.get('orderid') if isinstance(order_data, dict) else str(order_data)
+                                    
+                                    if order_id and order_id != "None":
+                                        log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", str(order_id))
+                                        return (True, s_id, str(order_id))
+                                    else:
+                                        err_msg = f"Invalid Order ID in response: {res}"
+                                        log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
+                                        return (False, s_id, err_msg)
                                 else:
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
                                     log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
