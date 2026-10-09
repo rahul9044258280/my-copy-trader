@@ -410,8 +410,9 @@ with tab2:
                     return (False, slave['id'], "Skipped (Inactive or Error)")
 
                 status_container = st.empty()
-                status_container.text("🚀 Engine Started! Executing master and broadcasting to individual active slaves safely...")
+                status_container.text("⚡ Ultra-Fast Execution Started! Broadcasting orders concurrently...")
 
+                # Lightning-fast parallel execution for Master orders
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     for master in st.session_state['master_objs_bulk']:
@@ -427,6 +428,7 @@ with tab2:
                         except Exception:
                             pass
 
+                # Ultra-Fast parallel broadcast to all 1000+ slaves simultaneously (max_workers=100)
                 slave_futures = []
                 with ThreadPoolExecutor(max_workers=100) as executor:
                     for slave in st.session_state['slave_objs_bulk']:
@@ -445,7 +447,7 @@ with tab2:
                             failed_slaves += 1
 
                 status_container.empty()
-                st.success(f"⚡ Copy Trade Executed Safely! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
+                st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
             else:
                 st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
@@ -494,7 +496,6 @@ with tab2:
                 return (False, acc['id'], 0)
 
             if all_accounts_kill:
-                # High-speed parallel thread execution (up to 100 concurrent workers for millisecond response)
                 with ThreadPoolExecutor(max_workers=100) as executor:
                     futures = [executor.submit(square_off_account_lightning, acc) for acc in all_accounts_kill]
                     total_exits = 0
