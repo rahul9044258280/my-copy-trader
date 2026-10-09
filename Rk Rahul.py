@@ -406,33 +406,53 @@ with tab2:
             if active_m > 0 and active_s > 0:
                 master_obj = st.session_state['master_objs_bulk'][0]['obj']
                 
-                # Robust Master Order Detection
+                # 🛠️ FIXED: Fetching active order book instead of positions for exact live parameter matching
                 target_symbol = None
                 target_token = None
                 target_qty = 1
                 target_txn = "BUY"
+                target_exchange = "NSE"
+                target_product = "DELIVERY"
                 
                 try:
-                    pos_res = master_obj.position()
-                    if pos_res and pos_res.get('status') and pos_res.get('data'):
-                        for p in pos_res['data']:
-                            netq = int(p.get('netqty', 0))
-                            if netq != 0:
-                                target_symbol = p.get('tradingsymbol')
-                                target_token = p.get('symboltoken')
-                                target_qty = abs(netq)
-                                target_txn = "BUY" if netq > 0 else "SELL"
-                                break
+                    book_res = master_obj.orderBook()
+                    if book_res and book_res.get('status') and book_res.get('data'):
+                        # Get the latest order from master book
+                        latest_order = book_res['data'][-1]
+                        target_symbol = latest_order.get('tradingsymbol')
+                        target_token = latest_order.get('symboltoken')
+                        target_qty = int(latest_order.get('quantity', 1))
+                        target_txn = latest_order.get('transactiontype', 'BUY')
+                        target_exchange = latest_order.get('exchange', 'NSE')
+                        target_product = latest_order.get('producttype', 'DELIVERY')
                 except Exception:
                     pass
 
+                # Fallback to positions if order book is empty
                 if not target_symbol or not target_token:
-                    st.error("⚠️ Master account me koi bhi open position nahi mili! Pehle Master me ek position open karein ya manual trade lein.")
+                    try:
+                        pos_res = master_obj.position()
+                        if pos_res and pos_res.get('status') and pos_res.get('data'):
+                            for p in pos_res['data']:
+                                netq = int(p.get('netqty', 0))
+                                if netq != 0:
+                                    target_symbol = p.get('tradingsymbol')
+                                    target_token = p.get('symboltoken')
+                                    target_qty = abs(netq)
+                                    target_txn = "BUY" if netq > 0 else "SELL"
+                                    target_exchange = p.get('exchange', 'NSE')
+                                    target_product = p.get('producttype', 'DELIVERY')
+                                    break
+                    except Exception:
+                        pass
+
+                if not target_symbol or not target_token:
+                    st.error("⚠️ Master account me koi active order ya position nahi mili! Pehle Master me trade place karein.")
                 else:
                     master_order_params = {
                         "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                        "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
-                        "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                        "transactiontype": target_txn, "exchange": target_exchange, "ordertype": "MARKET",
+                        "producttype": target_product, "duration": "DAY", "price": "0",
                         "squareoff": "0", "stoploss": "0", "quantity": str(target_qty)
                     }
                     
@@ -466,8 +486,8 @@ with tab2:
                                 final_qty = target_qty * mult
                                 slave_order_params = {
                                     "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                                    "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
-                                    "producttype": "DELIVERY", "duration": "DAY", "price": "0",
+                                    "transactiontype": target_txn, "exchange": target_exchange, "ordertype": "MARKET",
+                                    "producttype": target_product, "duration": "DAY", "price": "0",
                                     "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                                 }
                                 res = slave["obj"].placeOrder(slave_order_params)
