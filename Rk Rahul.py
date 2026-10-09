@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Page Configuration
 st.set_page_config(page_title="Angel One Ultra-Fast Copy Trading Terminal", layout="wide")
 
-# Custom Clean Dark Cinematic Theme & 3D Boxy Tabs Styling
+# Custom Clean Dark Cinematic Theme, 3D Boxy Tabs Styling & 3D Box for Metrics
 st.markdown("""
     <style>
     .main {background-color: #0e1117; color: #e0e0e0;}
@@ -53,6 +53,25 @@ st.markdown("""
         font-weight: bold !important;
         box-shadow: 0 4px 14px rgba(0, 208, 156, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.4) !important;
         transform: translateY(-1px);
+    }
+
+    /* 3D Horizontal Box Section Styling */
+    .metric-box-3d {
+        background: linear-gradient(145deg, #161b22, #0d1117);
+        border: 2px solid #30363d;
+        border-radius: 10px;
+        padding: 16px 20px;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+    .metric-item {
+        text-align: center;
+        font-weight: bold;
+        color: #ffffff;
+        font-size: 16px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -313,7 +332,16 @@ with tab2:
     active_slaves = len(st.session_state.get('slave_objs_bulk', []))
     engine_state = st.session_state.get('engine_running', False)
     
-    st.info(f"**Engine State:** {'Running 🟢' if engine_state else 'Stopped 🔴'}\n\n**Active Masters:** {active_masters}\n\n**Active Slaves:** {active_slaves}")
+    engine_text = "Running 🟢" if engine_state else "Stopped 🔴"
+    
+    # 3D Box with horizontal layout for Engine State, Active Masters, Active Slaves
+    st.markdown(f"""
+        <div class="metric-box-3d">
+            <div class="metric-item">Engine State: <b>{engine_text}</b></div>
+            <div class="metric-item">Active Masters: <b>{active_masters}</b></div>
+            <div class="metric-item">Active Slaves: <b>{active_slaves}</b></div>
+        </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     
