@@ -486,7 +486,7 @@ with tab2:
                                 
                                 res = slave_obj.placeOrder(slave_order_params)
                                 
-                                if res and isinstance(res, dict) and (res.get('status'] == True or 'data' in res):
+                                if res and isinstance(res, dict) and (res.get['status'] == True or 'data' in res):
                                     order_id = res.get('data', {}).get('orderid', 'PLACED')
                                     log_trade("Slave", s_id, pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
                                     return (True, s_id, order_id)
