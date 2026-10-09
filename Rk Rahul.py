@@ -404,36 +404,49 @@ with tab2:
             active_s = len(st.session_state.get('slave_objs_bulk', []))
             
             if active_m > 0 and active_s > 0:
-                base_qty = 1
+                # 🛠️ FIXED: Dynamically fetch latest open position from Master account to copy actual symbol & token
+                master_obj = st.session_state['master_objs_bulk'][0]['obj']
+                master_id = st.session_state['master_objs_bulk'][0]['id']
+                
+                target_symbol = "SBIN-EQ"
+                target_token = "3045"
+                target_qty = 1
+                target_txn = "BUY"
+                
+                try:
+                    pos_res = master_obj.position()
+                    if pos_res and pos_res.get('status') and pos_res.get('data'):
+                        for p in pos_res['data']:
+                            netq = int(p.get('netqty', 0))
+                            if netq != 0:
+                                target_symbol = p.get('tradingsymbol')
+                                target_token = p.get('symboltoken')
+                                target_qty = abs(netq)
+                                target_txn = "BUY" if netq > 0 else "SELL"
+                                break
+                except Exception:
+                    pass
+
                 master_order_params = {
-                    "variety": "NORMAL", "tradingsymbol": "SBIN-EQ", "symboltoken": "3045",
-                    "transactiontype": "BUY", "exchange": "NSE", "ordertype": "MARKET",
+                    "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
+                    "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
                     "producttype": "DELIVERY", "duration": "DAY", "price": "0",
-                    "squareoff": "0", "stoploss": "0", "quantity": str(base_qty)
+                    "squareoff": "0", "stoploss": "0", "quantity": str(target_qty)
                 }
                 
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        # Relaxed & Robust Response Handling for Angel One SmartAPI
-                        if res:
-                            if isinstance(res, dict):
-                                if res.get('status') == True or res.get('success') == True or 'data' in res:
-                                    order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                    log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
-                                    return (True, master['id'], order_id)
-                                else:
-                                    err_msg = res.get('message', str(res))
-                                    log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {err_msg}", "None")
-                                    return (False, master['id'], err_msg)
-                            else:
-                                log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", str(res))
-                                return (True, master['id'], str(res))
+                        if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                            order_id = res.get('data', {}).get('orderid', 'PLACED')
+                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, "SUCCESS", order_id)
+                            return (True, master['id'], order_id)
                         else:
-                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAIL: Empty Response", "None")
-                            return (False, master['id'], "Empty Response")
+                            err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
+                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {err_msg}", "None")
+                            return (False, master['id'], err_msg)
                     except Exception as e:
-                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {str(e)}", "None")
+                        log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
                         return (False, master['id'], str(e))
 
                 def place_slave_order(slave):
@@ -448,39 +461,31 @@ with tab2:
                         mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
 
                         if is_act == 1:
-                            final_qty = base_qty * mult
+                            final_qty = target_qty * mult
                             slave_order_params = {
-                                "variety": "NORMAL", "tradingsymbol": "SBIN-EQ", "symboltoken": "3045",
-                                "transactiontype": "BUY", "exchange": "NSE", "ordertype": "MARKET",
+                                "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
+                                "transactiontype": target_txn, "exchange": "NSE", "ordertype": "MARKET",
                                 "producttype": "DELIVERY", "duration": "DAY", "price": "0",
                                 "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                             }
                             res = slave["obj"].placeOrder(slave_order_params)
                             
-                            if res:
-                                if isinstance(res, dict):
-                                    if res.get('status') == True or res.get('success') == True or 'data' in res:
-                                        order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
-                                        return (True, slave['id'], order_id)
-                                    else:
-                                        err_msg = res.get('message', str(res))
-                                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, f"FAIL: {err_msg}", "None")
-                                        return (False, slave['id'], err_msg)
-                                else:
-                                    log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", str(res))
-                                    return (True, slave['id'], str(res))
+                            if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                                order_id = res.get('data', {}).get('orderid', 'PLACED')
+                                log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, "SUCCESS", order_id)
+                                return (True, slave['id'], order_id)
                             else:
-                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAIL: Empty Response", "None")
-                                return (False, slave['id'], "Empty Response")
+                                err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
+                                log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, f"FAIL: {err_msg}", "None")
+                                return (False, slave['id'], err_msg)
                         else:
                             return (False, slave['id'], "Skipped (Inactive)")
                     except Exception as e:
-                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {str(e)}", "None")
+                        log_trade("Slave", slave['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
                         return (False, slave['id'], str(e))
 
                 status_container = st.empty()
-                status_container.text("⚡ Ultra-Fast Execution Started! Broadcasting orders concurrently...")
+                status_container.text(f"⚡ Copying {target_symbol} ({target_txn}) across accounts concurrently...")
 
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
