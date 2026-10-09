@@ -415,28 +415,27 @@ with tab2:
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        order_id = "PLACED"
-                        if isinstance(res, dict):
-                            order_id = res.get('data', {}).get('orderid', res.get('message', 'PLACED'))
-                        elif res is not None:
-                            order_id = str(res)
-                        
-                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
-                        return (True, master['id'], order_id)
+                        # Strict Angel One Status Verification
+                        if isinstance(res, dict) and res.get('status') == True:
+                            order_id = res.get('data', {}).get('orderid', 'UNKNOWN')
+                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
+                            return (True, master['id'], order_id)
+                        else:
+                            err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
+                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", err_msg)
+                            return (False, master['id'], err_msg)
                     except Exception as e:
                         log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
                         return (False, master['id'], str(e))
 
                 def place_slave_order(slave):
                     try:
-                        # Thread-safe independent database connection for each thread execution
                         t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
                         cur = t_conn.cursor()
                         cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
                         row = cur.fetchone()
                         t_conn.close()
 
-                        # If row not found or active by default, proceed with multiplier
                         is_act = row[0] if row else 1
                         mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
 
@@ -449,14 +448,16 @@ with tab2:
                                 "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                             }
                             res = slave["obj"].placeOrder(slave_order_params)
-                            order_id = "PLACED"
-                            if isinstance(res, dict):
-                                order_id = res.get('data', {}).get('orderid', res.get('message', 'PLACED'))
-                            elif res is not None:
-                                order_id = str(res)
-
-                            log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
-                            return (True, slave['id'], order_id)
+                            
+                            # Strict Angel One Status Verification for Slave
+                            if isinstance(res, dict) and res.get('status') == True:
+                                order_id = res.get('data', {}).get('orderid', 'UNKNOWN')
+                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
+                                return (True, slave['id'], order_id)
+                            else:
+                                err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
+                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAILED", err_msg)
+                                return (False, slave['id'], err_msg)
                         else:
                             return (False, slave['id'], "Skipped (Inactive)")
                     except Exception as e:
@@ -475,7 +476,7 @@ with tab2:
                         try:
                             success, m_id, m_res = f.result()
                             if success:
-                                st.success(f"Master ({m_id}) Placed! Response/ID: {m_res}")
+                                st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
                             else:
                                 st.error(f"Master ({m_id}) Error: {m_res}")
                         except Exception:
@@ -540,9 +541,7 @@ with tab2:
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
                                 res = acc['obj'].placeOrder(sq_params)
-                                order_id = "EXIT"
-                                if isinstance(res, dict):
-                                    order_id = res.get('data', {}).get('orderid', 'EXIT')
+                                order_id = res.get('data', {}).get('orderid', 'EXIT') if isinstance(res, dict) else 'EXIT'
                                 log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", order_id)
                                 exits_placed += 1
                         return (True, acc['id'], exits_placed)
