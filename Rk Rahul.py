@@ -141,7 +141,7 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
         cursor.execute('''
             INSERT INTO logs (timestamp, account_type, client_id, symbol, action, qty, status, order_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, status, str(order_id)))
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], account_type, client_id, symbol, action, qty, str(status)[:50], str(order_id)[:50]))
         thread_conn.commit()
         thread_conn.close()
     except Exception:
@@ -415,17 +415,25 @@ with tab2:
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        # Bulletproof response parsing
-                        if isinstance(res, dict) and (res.get('status') == True or res.get('success') == True):
-                            order_id = res.get('data', {}).get('orderid', 'PLACED')
-                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
-                            return (True, master['id'], order_id)
+                        # Relaxed & Robust Response Handling for Angel One SmartAPI
+                        if res:
+                            if isinstance(res, dict):
+                                if res.get('status') == True or res.get('success') == True or 'data' in res:
+                                    order_id = res.get('data', {}).get('orderid', 'PLACED')
+                                    log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
+                                    return (True, master['id'], order_id)
+                                else:
+                                    err_msg = res.get('message', str(res))
+                                    log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {err_msg}", "None")
+                                    return (False, master['id'], err_msg)
+                            else:
+                                log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", str(res))
+                                return (True, master['id'], str(res))
                         else:
-                            err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", err_msg[:50])
-                            return (False, master['id'], err_msg)
+                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAIL: Empty Response", "None")
+                            return (False, master['id'], "Empty Response")
                     except Exception as e:
-                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e)[:50])
+                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {str(e)}", "None")
                         return (False, master['id'], str(e))
 
                 def place_slave_order(slave):
@@ -449,18 +457,26 @@ with tab2:
                             }
                             res = slave["obj"].placeOrder(slave_order_params)
                             
-                            if isinstance(res, dict) and (res.get('status') == True or res.get('success') == True):
-                                order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
-                                return (True, slave['id'], order_id)
+                            if res:
+                                if isinstance(res, dict):
+                                    if res.get('status') == True or res.get('success') == True or 'data' in res:
+                                        order_id = res.get('data', {}).get('orderid', 'PLACED')
+                                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
+                                        return (True, slave['id'], order_id)
+                                    else:
+                                        err_msg = res.get('message', str(res))
+                                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, f"FAIL: {err_msg}", "None")
+                                        return (False, slave['id'], err_msg)
+                                else:
+                                    log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", str(res))
+                                    return (True, slave['id'], str(res))
                             else:
-                                err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAILED", err_msg[:50])
-                                return (False, slave['id'], err_msg)
+                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAIL: Empty Response", "None")
+                                return (False, slave['id'], "Empty Response")
                         else:
                             return (False, slave['id'], "Skipped (Inactive)")
                     except Exception as e:
-                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e)[:50])
+                        log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, f"FAIL: {str(e)}", "None")
                         return (False, slave['id'], str(e))
 
                 status_container = st.empty()
@@ -475,7 +491,7 @@ with tab2:
                         try:
                             success, m_id, m_res = f.result()
                             if success:
-                                st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
+                                st.success(f"Master ({m_id}) Placed! Order ID/Res: {m_res}")
                             else:
                                 st.error(f"Master ({m_id}) Error: {m_res}")
                         except Exception:
@@ -490,11 +506,13 @@ with tab2:
                     failed_slaves = 0
                     for f in as_completed(slave_futures):
                         try:
-                            success, s_id, _ = f.result()
+                            success, s_id, s_msg = f.result()
                             if success:
                                 success_slaves += 1
+                                st.success(f"Slave ({s_id}) Placed Successfully!")
                             else:
                                 failed_slaves += 1
+                                st.error(f"Slave ({s_id}) Failed: {s_msg}")
                         except Exception:
                             failed_slaves += 1
 
@@ -545,7 +563,7 @@ with tab2:
                                 exits_placed += 1
                         return (True, acc['id'], exits_placed)
                 except Exception as e:
-                    log_trade(acc['type'], acc['id'], "ALL", "KILL_SWITCH_ERR", 0, "FAILED", str(e)[:50])
+                    log_trade(acc['type'], acc['id'], "ALL", "KILL_SWITCH_ERR", 0, f"FAIL: {str(e)}", "None")
                 return (False, acc['id'], 0)
 
             if all_accounts_kill:
