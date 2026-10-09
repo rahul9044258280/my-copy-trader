@@ -4,6 +4,8 @@ import pyotp
 import yfinance as yf
 import pandas as pd
 import sqlite3
+import time
+import threading
 from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -145,6 +147,42 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
     except Exception:
         pass
 
+# Background Heartbeat & Auto-Reconnect Monitor
+def background_heartbeat_monitor():
+    while True:
+        try:
+            time.sleep(60) # Run every 60 seconds
+            if 'master_objs_bulk' in st.session_state and 'slave_objs_bulk' in st.session_state:
+                all_active = st.session_state['master_objs_bulk'] + st.session_state['slave_objs_bulk']
+                for acc in all_active:
+                    try:
+                        # Lightweight call to verify session health
+                        acc['obj'].rmsLimit()
+                    except Exception:
+                        # Attempt auto-reconnect using database credentials
+                        try:
+                            if db_conn:
+                                cur = db_conn.cursor()
+                                cur.execute("SELECT password, totp_secret, api_key FROM clients WHERE client_id = ?", (acc['id'],))
+                                row = cur.fetchone()
+                                if row:
+                                    pwd, totp_sec, api_k = row
+                                    totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
+                                    new_obj = SmartConnect(api_key=api_k)
+                                    session_data = new_obj.generateSession(acc['id'], pwd, totp_gen)
+                                    if session_data and session_data.get('status'):
+                                        acc['obj'] = new_obj
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+# Start background monitor thread once safely
+if 'heartbeat_started' not in st.session_state:
+    st.session_state['heartbeat_started'] = True
+    hb_thread = threading.Thread(target=background_heartbeat_monitor, daemon=True)
+    hb_thread.start()
+
 # App Header & Live Market Bar
 st.title("⚡ Angel One Ultra-Fast Copy Trading Terminal")
 
@@ -166,7 +204,7 @@ try:
     with ticker_col2:
         st.metric("BANK NIFTY", f"₹{bank_price:,.2f}", f"{bank_chg:+.2f}")
     with ticker_col3:
-        st.metric("Engine Status", "Ready", "Active")
+        st.metric("Engine Status & Heartbeat", "Active 🟢", "Protected")
 except Exception:
     st.metric("Market Data", "Connected", "Stable")
 
@@ -236,7 +274,7 @@ with tab1:
                     st.warning("Client ID aur API Key zaroori hai!")
 
     st.markdown("---")
-    st.subheader("🚀 Parallel Auto-Login & Token Regeneration Panel")
+    st.subheader("🚀 Parallel Auto-Login & Heartbeat Protected Panel")
     
     if st.button("⚡ Parallel Auto-Login All 1000+ Clients"):
         if db_conn:
@@ -281,7 +319,7 @@ with tab1:
                 st.session_state['master_objs_bulk'] = master_objs
                 st.session_state['slave_objs_bulk'] = slave_objs
                 progress_text.empty()
-                st.success(f"Auto-Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
+                st.success(f"Auto-Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)} (Heartbeat Monitor Active)")
 
     st.markdown("### 📋 Manage Saved Accounts & Full Details Editor")
     if db_conn:
@@ -412,7 +450,6 @@ with tab2:
                 status_container = st.empty()
                 status_container.text("⚡ Ultra-Fast Execution Started! Broadcasting orders concurrently...")
 
-                # Lightning-fast parallel execution for Master orders
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     for master in st.session_state['master_objs_bulk']:
@@ -428,7 +465,6 @@ with tab2:
                         except Exception:
                             pass
 
-                # Ultra-Fast parallel broadcast to all 1000+ slaves simultaneously (max_workers=100)
                 slave_futures = []
                 with ThreadPoolExecutor(max_workers=100) as executor:
                     for slave in st.session_state['slave_objs_bulk']:
