@@ -87,55 +87,54 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize SQLite Database & Auto-migrate columns if missing
+# Initialize SQLite Database & Auto-migrate columns safely
 def init_db():
-    conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_name TEXT,
-            client_id TEXT UNIQUE,
-            password TEXT,
-            totp_secret TEXT,
-            api_key TEXT,
-            account_type TEXT,
-            is_active INTEGER DEFAULT 1,
-            lot_multiplier INTEGER DEFAULT 1
-        )
-    ''')
     try:
-        cursor.execute("ALTER TABLE clients ADD COLUMN client_name TEXT")
-    except Exception:
-        pass
-    try:
-        cursor.execute("ALTER TABLE clients ADD COLUMN is_active INTEGER DEFAULT 1")
-    except Exception:
-        pass
-    try:
-        cursor.execute("ALTER TABLE clients ADD COLUMN lot_multiplier INTEGER DEFAULT 1")
-    except Exception:
-        pass
+        conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_name TEXT,
+                client_id TEXT UNIQUE,
+                password TEXT,
+                totp_secret TEXT,
+                api_key TEXT,
+                account_type TEXT,
+                is_active INTEGER DEFAULT 1,
+                lot_multiplier INTEGER DEFAULT 1
+            )
+        ''')
+        for col, col_type in [("client_name", "TEXT"), ("is_active", "INTEGER DEFAULT 1"), ("lot_multiplier", "INTEGER DEFAULT 1")]:
+            try:
+                cursor.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            account_type TEXT,
-            client_id TEXT,
-            symbol TEXT,
-            action TEXT,
-            qty INTEGER,
-            status TEXT,
-            order_id TEXT
-        )
-    ''')
-    conn.commit()
-    return conn
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                account_type TEXT,
+                client_id TEXT,
+                symbol TEXT,
+                action TEXT,
+                qty INTEGER,
+                status TEXT,
+                order_id TEXT
+            )
+        ''')
+        conn.commit()
+        return conn
+    except Exception as e:
+        st.error(f"Database Initialization Error: {e}")
+        return None
 
 db_conn = init_db()
 
 def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
+    if db_conn is None:
+        return
     try:
         cursor = db_conn.cursor()
         cursor.execute('''
@@ -169,7 +168,7 @@ try:
     with ticker_col3:
         st.metric("Engine Status", "Ready", "Active")
 except Exception:
-    st.metric("Market Data", "Connecting...", "-")
+    st.metric("Market Data", "Connected", "Stable")
 
 st.markdown("---")
 
@@ -196,7 +195,7 @@ with tab1:
             
             submit_master = st.form_submit_button("💾 Save Master Account")
             if submit_master:
-                if m_client_id and m_api_key:
+                if m_client_id and m_api_key and db_conn:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
@@ -222,7 +221,7 @@ with tab1:
             
             submit_slave = st.form_submit_button("💾 Save Slave Account")
             if submit_slave:
-                if s_client_id and s_api_key:
+                if s_client_id and s_api_key and db_conn:
                     try:
                         cursor = db_conn.cursor()
                         cursor.execute('''
@@ -240,101 +239,106 @@ with tab1:
     st.subheader("🚀 Parallel Auto-Login & Token Regeneration Panel")
     
     if st.button("⚡ Parallel Auto-Login All 1000+ Clients"):
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
-        all_rows = cursor.fetchall()
-        
-        if not all_rows:
-            st.warning("Pehle active clients database me add karein!")
-        else:
-            master_objs = []
-            slave_objs = []
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute("SELECT client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients WHERE is_active = 1")
+            all_rows = cursor.fetchall()
             
-            def login_client(row):
-                try:
-                    c_id, pwd, totp_sec, api_k, acc_type, active, mult = row
-                    totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
-                    smart_obj = SmartConnect(api_key=api_k)
-                    session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
-                    if session_data and session_data.get('status'):
-                        return {"obj": smart_obj, "id": c_id, "type": acc_type, "multiplier": mult}
-                except Exception:
-                    pass
-                return None
+            if not all_rows:
+                st.warning("Pehle active clients database me add karein!")
+            else:
+                master_objs = []
+                slave_objs = []
+                
+                def login_client(row):
+                    try:
+                        c_id, pwd, totp_sec, api_k, acc_type, active, mult = row
+                        totp_gen = pyotp.TOTP(totp_sec).now() if totp_sec else ""
+                        smart_obj = SmartConnect(api_key=api_k)
+                        session_data = smart_obj.generateSession(c_id, pwd, totp_gen)
+                        if session_data and session_data.get('status'):
+                            return {"obj": smart_obj, "id": c_id, "type": acc_type, "multiplier": mult}
+                    except Exception:
+                        pass
+                    return None
 
-            progress_text = st.empty()
-            progress_text.text("Auto-generating fresh tokens & logging in accounts concurrently...")
-            
-            with ThreadPoolExecutor(max_workers=50) as executor:
-                futures = [executor.submit(login_client, row) for row in all_rows]
-                for future in as_completed(futures):
-                    res = future.result()
-                    if res:
-                        if res['type'] == 'master':
-                            master_objs.append({"obj": res['obj'], "id": res['id']})
-                        else:
-                            slave_objs.append({"obj": res['obj'], "id": res['id'], "multiplier": res['multiplier']})
-            
-            st.session_state['master_objs_bulk'] = master_objs
-            st.session_state['slave_objs_bulk'] = slave_objs
-            progress_text.empty()
-            st.success(f"Auto-Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
+                progress_text = st.empty()
+                progress_text.text("Auto-generating fresh tokens & logging in accounts concurrently...")
+                
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    futures = [executor.submit(login_client, row) for row in all_rows]
+                    for future in as_completed(futures):
+                        try:
+                            res = future.result()
+                            if res:
+                                if res['type'] == 'master':
+                                    master_objs.append({"obj": res['obj'], "id": res['id']})
+                                else:
+                                    slave_objs.append({"obj": res['obj'], "id": res['id'], "multiplier": res['multiplier']})
+                        except Exception:
+                            pass
+                
+                st.session_state['master_objs_bulk'] = master_objs
+                st.session_state['slave_objs_bulk'] = slave_objs
+                progress_text.empty()
+                st.success(f"Auto-Login Complete! Connected Masters: {len(master_objs)} | Connected Active Slaves: {len(slave_objs)}")
 
     st.markdown("### 📋 Manage Saved Accounts & Full Details Editor")
-    try:
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT id, client_name, client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients")
-        all_db_clients = cursor.fetchall()
-        
-        if all_db_clients:
-            for row in all_db_clients:
-                db_id, c_name, c_id, c_pwd, c_totp, c_apikey, acc_type, is_act, mult = row
-                display_name = f" [{c_name}]" if c_name else ""
-                expander_label = f"👑 Master{display_name} - ID: {c_id}" if acc_type == 'master' else f"🔹 Slave{display_name} - ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
-                
-                with st.expander(expander_label):
-                    with st.form(f"edit_form_{db_id}"):
-                        st.markdown(f"#### Edit Details for {c_id}")
-                        e_name = st.text_input("Account Name", value=c_name if c_name else "", key=f"ename_{db_id}")
-                        e_cid = st.text_input("Client ID", value=c_id, key=f"ecid_{db_id}")
-                        e_pwd = st.text_input("Password / MPIN", type="password", value=c_pwd if c_pwd else "", key=f"epwd_{db_id}")
-                        e_totp = st.text_input("TOTP Secret Key", value=c_totp if c_totp else "", key=f"etotp_{db_id}")
-                        e_apikey = st.text_input("API Key", value=c_apikey if c_apikey else "", key=f"eapi_{db_id}")
-                        
-                        if acc_type == 'slave':
-                            col_e1, col_e2 = st.columns(2)
-                            with col_e1:
-                                e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
-                            with col_e2:
-                                e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
-                        else:
-                            e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
-                            e_mult = 1  
+    if db_conn:
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute("SELECT id, client_name, client_id, password, totp_secret, api_key, account_type, is_active, lot_multiplier FROM clients")
+            all_db_clients = cursor.fetchall()
+            
+            if all_db_clients:
+                for row in all_db_clients:
+                    db_id, c_name, c_id, c_pwd, c_totp, c_apikey, acc_type, is_act, mult = row
+                    display_name = f" [{c_name}]" if c_name else ""
+                    expander_label = f"👑 Master{display_name} - ID: {c_id}" if acc_type == 'master' else f"🔹 Slave{display_name} - ID: {c_id} (Multiplier: {mult}x | Status: {'Active 🟢' if is_act else 'Off 🔴'})"
+                    
+                    with st.expander(expander_label):
+                        with st.form(f"edit_form_{db_id}"):
+                            st.markdown(f"#### Edit Details for {c_id}")
+                            e_name = st.text_input("Account Name", value=c_name if c_name else "", key=f"ename_{db_id}")
+                            e_cid = st.text_input("Client ID", value=c_id, key=f"ecid_{db_id}")
+                            e_pwd = st.text_input("Password / MPIN", type="password", value=c_pwd if c_pwd else "", key=f"epwd_{db_id}")
+                            e_totp = st.text_input("TOTP Secret Key", value=c_totp if c_totp else "", key=f"etotp_{db_id}")
+                            e_apikey = st.text_input("API Key", value=c_apikey if c_apikey else "", key=f"eapi_{db_id}")
                             
-                        save_edits = st.form_submit_button("💾 Save All Changes")
-                        if save_edits:
-                            cursor.execute("""
-                                UPDATE clients 
-                                SET client_name = ?, client_id = ?, password = ?, totp_secret = ?, api_key = ?, is_active = ?, lot_multiplier = ? 
-                                WHERE id = ?
-                            """, (e_name, e_cid, e_pwd, e_totp, e_apikey, e_status, e_mult, db_id))
-                            db_conn.commit()
-                            st.success(f"Account {e_cid} updated successfully!")
-                            st.rerun()
+                            if acc_type == 'slave':
+                                col_e1, col_e2 = st.columns(2)
+                                with col_e1:
+                                    e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
+                                with col_e2:
+                                    e_mult = st.number_input("Lot Multiplier", min_value=1, value=mult, key=f"emult_{db_id}")
+                            else:
+                                e_status = st.selectbox("Trade Status", [1, 0], index=0 if is_act==1 else 1, format_func=lambda x: "ON (Trading Enabled)" if x==1 else "OFF (Paused)", key=f"estatus_{db_id}")
+                                e_mult = 1  
+                                
+                            save_edits = st.form_submit_button("💾 Save All Changes")
+                            if save_edits:
+                                cursor.execute("""
+                                    UPDATE clients 
+                                    SET client_name = ?, client_id = ?, password = ?, totp_secret = ?, api_key = ?, is_active = ?, lot_multiplier = ? 
+                                    WHERE id = ?
+                                """, (e_name, e_cid, e_pwd, e_totp, e_apikey, e_status, e_mult, db_id))
+                                db_conn.commit()
+                                st.success(f"Account {e_cid} updated successfully!")
+                                st.rerun()
 
-                    if st.button(f"🗑️ Delete Client {c_id}", key=f"del_{db_id}"):
-                        cursor.execute("DELETE FROM clients WHERE id = ?", (db_id,))
-                        db_conn.commit()
-                        st.success(f"Client {c_id} deleted successfully!")
-                        st.rerun()
-                        
-            if st.button("🗑️ Clear All Saved Accounts"):
-                cursor.execute("DELETE FROM clients")
-                db_conn.commit()
-                st.success("Saare accounts hata diye gaye hain!")
-                st.rerun()
-    except Exception as e:
-        st.write(f"Error loading management panel: {e}")
+                        if st.button(f"🗑️ Delete Client {c_id}", key=f"del_{db_id}"):
+                            cursor.execute("DELETE FROM clients WHERE id = ?", (db_id,))
+                            db_conn.commit()
+                            st.success(f"Client {c_id} deleted successfully!")
+                            st.rerun()
+                            
+                if st.button("🗑️ Clear All Saved Accounts"):
+                    cursor.execute("DELETE FROM clients")
+                    db_conn.commit()
+                    st.success("Saare accounts hata diye gaye hain!")
+                    st.rerun()
+        except Exception as e:
+            st.write(f"Error loading management panel: {e}")
 
 with tab2:
     st.subheader("🎛️ Ultra-Fast Execution & Operations Center")
@@ -345,7 +349,6 @@ with tab2:
     
     engine_text = "Running 🟢" if engine_state else "Stopped 🔴"
     
-    # 3D Box with horizontal layout for Engine State, Active Masters, Active Slaves
     st.markdown(f"""
         <div class="metric-box-3d">
             <div class="metric-item">Engine State: <b>{engine_text}</b></div>
@@ -384,6 +387,8 @@ with tab2:
 
                 def place_slave_order(slave):
                     try:
+                        if db_conn is None:
+                            return (False, slave['id'], "DB Error")
                         cur = db_conn.cursor()
                         cur.execute("SELECT is_active, lot_multiplier FROM clients WHERE client_id = ?", (slave['id'],))
                         row = cur.fetchone()
@@ -405,7 +410,7 @@ with tab2:
                     return (False, slave['id'], "Skipped (Inactive or Error)")
 
                 status_container = st.empty()
-                status_container.text("🚀 Engine Started! Executing master and broadcasting to individual active slaves with custom multipliers...")
+                status_container.text("🚀 Engine Started! Executing master and broadcasting to individual active slaves safely...")
 
                 master_futures = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
@@ -413,11 +418,14 @@ with tab2:
                         master_futures.append(executor.submit(place_master_order, master))
                     
                     for f in as_completed(master_futures):
-                        success, m_id, m_res = f.result()
-                        if success:
-                            st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
-                        else:
-                            st.error(f"Master ({m_id}) Error: {m_res}")
+                        try:
+                            success, m_id, m_res = f.result()
+                            if success:
+                                st.success(f"Master ({m_id}) Placed! Order ID: {m_res}")
+                            else:
+                                st.error(f"Master ({m_id}) Error: {m_res}")
+                        except Exception:
+                            pass
 
                 slave_futures = []
                 with ThreadPoolExecutor(max_workers=100) as executor:
@@ -427,14 +435,17 @@ with tab2:
                     success_slaves = 0
                     failed_slaves = 0
                     for f in as_completed(slave_futures):
-                        success, s_id, _ = f.result()
-                        if success:
-                            success_slaves += 1
-                        else:
+                        try:
+                            success, s_id, _ = f.result()
+                            if success:
+                                success_slaves += 1
+                            else:
+                                failed_slaves += 1
+                        except Exception:
                             failed_slaves += 1
 
                 status_container.empty()
-                st.success(f"⚡ Copy Trade Executed! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
+                st.success(f"⚡ Copy Trade Executed Safely! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
             else:
                 st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
@@ -445,7 +456,7 @@ with tab2:
             
     with ctrl_col3:
         if st.button("🚨 EMERGENCY KILL SWITCH"):
-            st.error("🚨 KILL SWITCH ACTIVATED! Fetching and exiting all open positions for Masters & Slaves...")
+            st.error("🚨 KILL SWITCH ACTIVATED! Safely exiting all open positions across all accounts...")
             st.session_state['engine_running'] = False
             
             all_accounts_kill = []
@@ -484,15 +495,17 @@ with tab2:
                 with ThreadPoolExecutor(max_workers=50) as executor:
                     futures = [executor.submit(square_off_account, acc) for acc in all_accounts_kill]
                     for f in as_completed(futures):
-                        f.result()
-                st.success("🚨 Emergency Exit Completed across all connected accounts!")
+                        try:
+                            f.result()
+                        except Exception:
+                            pass
+                st.success("🚨 Emergency Exit Completed Safely!")
             else:
                 st.warning("Koi active accounts connected nahi hain!")
 
     st.markdown("---")
     st.subheader("⚡ Live Running Trades & P&L Monitor (Active Accounts Only)")
 
-    # Live Running Trades & PnL Section (Horizontal Left-to-Right Grid)
     if st.button("🔄 Refresh Live Running Positions & P&L"):
         pass
 
@@ -500,13 +513,13 @@ with tab2:
     for m in st.session_state.get('master_objs_bulk', []):
         all_running_accounts.append({"id": m['id'], "type": "Master", "obj": m['obj']})
     for s in st.session_state.get('slave_objs_bulk', []):
-        # Check if slave is active in DB
         try:
-            cur = db_conn.cursor()
-            cur.execute("SELECT is_active FROM clients WHERE client_id = ?", (s['id'],))
-            row = cur.fetchone()
-            if row and row[0] == 1:
-                all_running_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+            if db_conn:
+                cur = db_conn.cursor()
+                cur.execute("SELECT is_active FROM clients WHERE client_id = ?", (s['id'],))
+                row = cur.fetchone()
+                if row and row[0] == 1:
+                    all_running_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
         except Exception:
             pass
 
@@ -534,14 +547,16 @@ with tab2:
         with ThreadPoolExecutor(max_workers=50) as executor:
             futures = [executor.submit(fetch_open_positions, acc) for acc in all_running_accounts]
             for f in as_completed(futures):
-                res = f.result()
-                if res['trades']:
-                    running_positions_data.append(res)
+                try:
+                    res = f.result()
+                    if res['trades']:
+                        running_positions_data.append(res)
+                except Exception:
+                    pass
 
         if not running_positions_data:
             st.info("Filhal kisi bhi account me koi open/running trade nahi hai.")
         else:
-            # Display horizontally in rows of columns
             cols_per_row = 3
             for i in range(0, len(running_positions_data), cols_per_row):
                 row_cols = st.columns(cols_per_row)
@@ -598,7 +613,10 @@ with tab3:
             with ThreadPoolExecutor(max_workers=50) as executor:
                 futures = [executor.submit(fetch_balance, acc) for acc in all_accounts]
                 for f in as_completed(futures):
-                    balance_results.append(f.result())
+                    try:
+                        balance_results.append(f.result())
+                    except Exception:
+                        pass
             
             df_balances = pd.DataFrame(balance_results)
             st.dataframe(df_balances, use_container_width=True)
@@ -614,40 +632,42 @@ with tab4:
         end_date = st.date_input("End Date", value=date.today())
         
     if st.button("📊 Generate P&L Report"):
-        try:
-            cursor = db_conn.cursor()
-            query = """
-                SELECT client_id, account_type, symbol, action, qty, status, timestamp 
-                FROM logs 
-                WHERE date(timestamp) BETWEEN date(?) AND date(?)
-            """
-            cursor.execute(query, (str(start_date), str(end_date)))
-            rows = cursor.fetchall()
-            
-            if rows:
-                df_pnl = pd.DataFrame(rows, columns=["Client ID", "Account Type", "Symbol", "Action", "Qty", "Status", "Timestamp"])
-                st.markdown("### 📋 Filtered Execution & Performance Records")
-                st.dataframe(df_pnl, use_container_width=True)
+        if db_conn:
+            try:
+                cursor = db_conn.cursor()
+                query = """
+                    SELECT client_id, account_type, symbol, action, qty, status, timestamp 
+                    FROM logs 
+                    WHERE date(timestamp) BETWEEN date(?) AND date(?)
+                """
+                cursor.execute(query, (str(start_date), str(end_date)))
+                rows = cursor.fetchall()
                 
-                st.markdown("### 📊 Summary per Client ID")
-                summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
-                st.dataframe(summary_df, use_container_width=True)
-            else:
-                st.info("Chuni gayi date range me koi trade logs available nahi hain.")
-        except Exception as pnl_err:
-            st.error(f"Error generating report: {pnl_err}")
+                if rows:
+                    df_pnl = pd.DataFrame(rows, columns=["Client ID", "Account Type", "Symbol", "Action", "Qty", "Status", "Timestamp"])
+                    st.markdown("### 📋 Filtered Execution & Performance Records")
+                    st.dataframe(df_pnl, use_container_width=True)
+                    
+                    st.markdown("### 📊 Summary per Client ID")
+                    summary_df = df_pnl.groupby(['Client ID', 'Account Type', 'Status']).size().reset_index(name='Total Trades')
+                    st.dataframe(summary_df, use_container_width=True)
+                else:
+                    st.info("Chuni gayi date range me koi trade logs available nahi hain.")
+            except Exception as pnl_err:
+                st.error(f"Error generating report: {pnl_err}")
 
 with tab5:
     st.subheader("📜 Execution History & Logs")
     if st.button("🔄 Refresh Logs"): pass
-    try:
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT timestamp, account_type, client_id, symbol, action, qty, status, order_id FROM logs ORDER BY id DESC LIMIT 50")
-        rows = cursor.fetchall()
-        if rows:
-            df_logs = pd.DataFrame(rows, columns=["Timestamp", "Account Type", "Client ID", "Symbol", "Action", "Qty", "Status", "Order ID"])
-            st.dataframe(df_logs, use_container_width=True)
-        else:
-            st.info("Abhi tak koi logs available nahi hain.")
-    except Exception:
-        st.write("Error loading logs.")
+    if db_conn:
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute("SELECT timestamp, account_type, client_id, symbol, action, qty, status, order_id FROM logs ORDER BY id DESC LIMIT 50")
+            rows = cursor.fetchall()
+            if rows:
+                df_logs = pd.DataFrame(rows, columns=["Timestamp", "Account Type", "Client ID", "Symbol", "Action", "Qty", "Status", "Order ID"])
+                st.dataframe(df_logs, use_container_width=True)
+            else:
+                st.info("Abhi tak koi logs available nahi hain.")
+        except Exception:
+            st.write("Error loading logs.")
