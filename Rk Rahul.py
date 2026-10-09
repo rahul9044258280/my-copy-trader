@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Page Configuration
 st.set_page_config(page_title="Angel One Ultra-Fast Copy Trading Terminal", layout="wide")
 
-# Custom Clean Dark Cinematic Theme, 3D Boxy Tabs Styling & 3D Box for Metrics
+# Custom Clean Dark Cinematic Theme, 3D Boxy Tabs Styling & Live PnL Cards Styling
 st.markdown("""
     <style>
     .main {background-color: #0e1117; color: #e0e0e0;}
@@ -72,6 +72,17 @@ st.markdown("""
         font-weight: bold;
         color: #ffffff;
         font-size: 16px;
+    }
+
+    /* Live PnL Card Styling */
+    .pnl-card-3d {
+        background: linear-gradient(145deg, #161b22, #0d1117);
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 12px 16px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        margin-bottom: 10px;
+        text-align: center;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -478,6 +489,83 @@ with tab2:
             else:
                 st.warning("Koi active accounts connected nahi hain!")
 
+    st.markdown("---")
+    st.subheader("⚡ Live Running Trades & P&L Monitor (Active Accounts Only)")
+
+    # Live Running Trades & PnL Section (Horizontal Left-to-Right Grid)
+    if st.button("🔄 Refresh Live Running Positions & P&L"):
+        pass
+
+    all_running_accounts = []
+    for m in st.session_state.get('master_objs_bulk', []):
+        all_running_accounts.append({"id": m['id'], "type": "Master", "obj": m['obj']})
+    for s in st.session_state.get('slave_objs_bulk', []):
+        # Check if slave is active in DB
+        try:
+            cur = db_conn.cursor()
+            cur.execute("SELECT is_active FROM clients WHERE client_id = ?", (s['id'],))
+            row = cur.fetchone()
+            if row and row[0] == 1:
+                all_running_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
+        except Exception:
+            pass
+
+    if not all_running_accounts:
+        st.info("Koi bhi account connected nahi hai. Pehle Tab 1 se Auto-Login karein.")
+    else:
+        running_positions_data = []
+
+        def fetch_open_positions(acc):
+            try:
+                pos_res = acc['obj'].position()
+                if pos_res and pos_res.get('status') and pos_res.get('data'):
+                    open_trades = []
+                    for p in pos_res['data']:
+                        net_qty = int(p.get('netqty', 0))
+                        if net_qty != 0:
+                            sym = p.get('tradingsymbol', 'N/A')
+                            pnl = float(p.get('pnl', 0.0))
+                            open_trades.append({"symbol": sym, "qty": net_qty, "pnl": pnl})
+                    return {"id": acc['id'], "type": acc['type'], "trades": open_trades}
+            except Exception:
+                pass
+            return {"id": acc['id'], "type": acc['type'], "trades": []}
+
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = [executor.submit(fetch_open_positions, acc) for acc in all_running_accounts]
+            for f in as_completed(futures):
+                res = f.result()
+                if res['trades']:
+                    running_positions_data.append(res)
+
+        if not running_positions_data:
+            st.info("Filhal kisi bhi account me koi open/running trade nahi hai.")
+        else:
+            # Display horizontally in rows of columns
+            cols_per_row = 3
+            for i in range(0, len(running_positions_data), cols_per_row):
+                row_cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j < len(running_positions_data):
+                        item = running_positions_data[i + j]
+                        with row_cols[j]:
+                            total_acc_pnl = sum([t['pnl'] for t in item['trades']])
+                            pnl_color = "#00d09c" if total_acc_pnl >= 0 else "#ff4d4d"
+                            
+                            trades_html = ""
+                            for t in item['trades']:
+                                t_color = "#00d09c" if t['pnl'] >= 0 else "#ff4d4d"
+                                trades_html += f"<div style='font-size:13px; color:#c9d1d9;'><b>{t['symbol']}</b> (Qty: {t['qty']}) | PnL: <span style='color:{t_color};'>₹{t['pnl']:,.2f}</span></div>"
+
+                            st.markdown(f"""
+                                <div class="pnl-card-3d">
+                                    <div style="font-weight:bold; color:#00d09c; margin-bottom:5px;">{item['type'].upper()} : {item['id']}</div>
+                                    {trades_html}
+                                    <hr style="margin:6px 0; border-color:#30363d;">
+                                    <div style="font-size:14px; font-weight:bold;">Total PnL: <span style="color:{pnl_color};">₹{total_acc_pnl:,.2f}</span></div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
 with tab3:
     st.subheader("💰 Live Master & Slave Account Balances")
     st.write("Yahan aap saare connected accounts ka live margin aur net available balance ek click me dekh sakte hain.")
@@ -490,7 +578,7 @@ with tab3:
             all_accounts.append({"id": s['id'], "type": "Slave", "obj": s['obj']})
             
         if not all_accounts:
-            st.warning("Pehle Tab 1 से accounts login/connect karein!")
+            st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
         else:
             balance_results = []
             
