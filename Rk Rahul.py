@@ -398,7 +398,7 @@ with tab2:
     ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
     
     with ctrl_col1:
-        if st.button("▶ START COPY TRADING"):
+        if st.button("▶ START COPY TRADING (MIRROR OPEN POSITIONS)"):
             st.session_state['engine_running'] = True
             active_m = len(st.session_state.get('master_objs_bulk', []))
             active_s = len(st.session_state.get('slave_objs_bulk', []))
@@ -406,72 +406,29 @@ with tab2:
             if active_m > 0 and active_s > 0:
                 master_obj = st.session_state['master_objs_bulk'][0]['obj']
                 
-                # 🛠️ FIXED: Fetching active order book instead of positions for exact live parameter matching
-                target_symbol = None
-                target_token = None
-                target_qty = 1
-                target_txn = "BUY"
-                target_exchange = "NSE"
-                target_product = "DELIVERY"
-                
+                # 🛠️ FIXED: Mirroring active open positions from Master directly to Slaves without re-triggering master order
+                open_positions = []
                 try:
-                    book_res = master_obj.orderBook()
-                    if book_res and book_res.get('status') and book_res.get('data'):
-                        # Get the latest order from master book
-                        latest_order = book_res['data'][-1]
-                        target_symbol = latest_order.get('tradingsymbol')
-                        target_token = latest_order.get('symboltoken')
-                        target_qty = int(latest_order.get('quantity', 1))
-                        target_txn = latest_order.get('transactiontype', 'BUY')
-                        target_exchange = latest_order.get('exchange', 'NSE')
-                        target_product = latest_order.get('producttype', 'DELIVERY')
-                except Exception:
-                    pass
+                    pos_res = master_obj.position()
+                    if pos_res and pos_res.get('status') and pos_res.get('data'):
+                        for p in pos_res['data']:
+                            netq = int(p.get('netqty', 0))
+                            if netq != 0:
+                                open_positions.append({
+                                    "tradingsymbol": p.get('tradingsymbol'),
+                                    "symboltoken": p.get('symboltoken'),
+                                    "qty": abs(netq),
+                                    "transactiontype": "BUY" if netq > 0 else "SELL",
+                                    "exchange": p.get('exchange', 'NSE'),
+                                    "producttype": p.get('producttype', 'DELIVERY')
+                                })
+                except Exception as e:
+                    st.error(f"Error fetching master positions: {e}")
 
-                # Fallback to positions if order book is empty
-                if not target_symbol or not target_token:
-                    try:
-                        pos_res = master_obj.position()
-                        if pos_res and pos_res.get('status') and pos_res.get('data'):
-                            for p in pos_res['data']:
-                                netq = int(p.get('netqty', 0))
-                                if netq != 0:
-                                    target_symbol = p.get('tradingsymbol')
-                                    target_token = p.get('symboltoken')
-                                    target_qty = abs(netq)
-                                    target_txn = "BUY" if netq > 0 else "SELL"
-                                    target_exchange = p.get('exchange', 'NSE')
-                                    target_product = p.get('producttype', 'DELIVERY')
-                                    break
-                    except Exception:
-                        pass
-
-                if not target_symbol or not target_token:
-                    st.error("⚠️ Master account me koi active order ya position nahi mili! Pehle Master me trade place karein.")
+                if not open_positions:
+                    st.warning("⚠️ Master account me koi open position nahi mili! Pehle Master me manual trade lo.")
                 else:
-                    master_order_params = {
-                        "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                        "transactiontype": target_txn, "exchange": target_exchange, "ordertype": "MARKET",
-                        "producttype": target_product, "duration": "DAY", "price": "0",
-                        "squareoff": "0", "stoploss": "0", "quantity": str(target_qty)
-                    }
-                    
-                    def place_master_order(master):
-                        try:
-                            res = master["obj"].placeOrder(master_order_params)
-                            if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
-                                order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                log_trade("Master", master['id'], target_symbol, target_txn, target_qty, "SUCCESS", order_id)
-                                return (True, master['id'], order_id)
-                            else:
-                                err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {err_msg}", "None")
-                                return (False, master['id'], err_msg)
-                        except Exception as e:
-                            log_trade("Master", master['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
-                            return (False, master['id'], str(e))
-
-                    def place_slave_order(slave):
+                    def copy_position_to_slave(slave, pos):
                         try:
                             t_conn = sqlite3.connect('trading_terminal.db', check_same_thread=False)
                             cur = t_conn.cursor()
@@ -483,68 +440,54 @@ with tab2:
                             mult = row[1] if row and len(row) > 1 else slave.get('multiplier', 1)
 
                             if is_act == 1:
-                                final_qty = target_qty * mult
+                                final_qty = pos['qty'] * mult
                                 slave_order_params = {
-                                    "variety": "NORMAL", "tradingsymbol": target_symbol, "symboltoken": target_token,
-                                    "transactiontype": target_txn, "exchange": target_exchange, "ordertype": "MARKET",
-                                    "producttype": target_product, "duration": "DAY", "price": "0",
+                                    "variety": "NORMAL", "tradingsymbol": pos['tradingsymbol'], "symboltoken": pos['symboltoken'],
+                                    "transactiontype": pos['transactiontype'], "exchange": pos['exchange'], "ordertype": "MARKET",
+                                    "producttype": pos['producttype'], "duration": "DAY", "price": "0",
                                     "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                                 }
                                 res = slave["obj"].placeOrder(slave_order_params)
                                 
-                                if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
+                                if res and isinstance(res, dict) and (res.get('status'] == True or 'data' in res):
                                     order_id = res.get('data', {}).get('orderid', 'PLACED')
-                                    log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, "SUCCESS", order_id)
+                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
                                     return (True, slave['id'], order_id)
                                 else:
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
-                                    log_trade("Slave", slave['id'], target_symbol, target_txn, final_qty, f"FAIL: {err_msg}", "None")
+                                    log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
                                     return (False, slave['id'], err_msg)
                             else:
                                 return (False, slave['id'], "Skipped (Inactive)")
                         except Exception as e:
-                            log_trade("Slave", slave['id'], target_symbol, target_txn, target_qty, f"FAIL: {str(e)}", "None")
+                            log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], pos['qty'], f"FAIL: {str(e)}", "None")
                             return (False, slave['id'], str(e))
 
                     status_container = st.empty()
-                    status_container.text(f"⚡ Copying {target_symbol} ({target_txn}) across accounts concurrently...")
+                    status_container.text("⚡ Mirroring master open positions to all active slaves concurrently...")
 
-                    master_futures = []
-                    with ThreadPoolExecutor(max_workers=10) as executor:
-                        for master in st.session_state['master_objs_bulk']:
-                            master_futures.append(executor.submit(place_master_order, master))
-                        
-                        for f in as_completed(master_futures):
-                            try:
-                                success, m_id, m_res = f.result()
-                                if success:
-                                    st.success(f"Master ({m_id}) Placed! Order ID/Res: {m_res}")
-                                else:
-                                    st.error(f"Master ({m_id}) Error: {m_res}")
-                            except Exception:
-                                pass
-
-                    slave_futures = []
+                    success_slaves = 0
+                    failed_slaves = 0
+                    
                     with ThreadPoolExecutor(max_workers=100) as executor:
+                        futures = []
                         for slave in st.session_state['slave_objs_bulk']:
-                            slave_futures.append(executor.submit(place_slave_order, slave))
+                            for pos in open_positions:
+                                futures.append(executor.submit(copy_position_to_slave, slave, pos))
                         
-                        success_slaves = 0
-                        failed_slaves = 0
-                        for f in as_completed(slave_futures):
+                        for f in as_completed(futures):
                             try:
                                 success, s_id, s_msg = f.result()
                                 if success:
                                     success_slaves += 1
-                                    st.success(f"Slave ({s_id}) Placed Successfully!")
+                                    st.success(f"Slave ({s_id}) Position Mirrored Successfully!")
                                 else:
                                     failed_slaves += 1
-                                    st.error(f"Slave ({s_id}) Failed: {s_msg}")
                             except Exception:
                                 failed_slaves += 1
 
                     status_container.empty()
-                    st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Failed/Skipped Slaves: {failed_slaves}")
+                    st.success(f"⚡ Mirror Complete! Successful Slave Orders: {success_slaves} | Failed/Skipped: {failed_slaves}")
             else:
                 st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
@@ -763,7 +706,7 @@ with tab4:
 
 with tab5:
     st.subheader("📜 Execution History & Logs")
-    if st.button("🔄 Refresh Logs"): pass
+    st.button("🔄 Refresh Logs")
     if db_conn:
         try:
             cursor = db_conn.cursor()
