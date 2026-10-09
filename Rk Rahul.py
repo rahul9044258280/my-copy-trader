@@ -406,7 +406,6 @@ with tab2:
             if active_m > 0 and active_s > 0:
                 master_obj = st.session_state['master_objs_bulk'][0]['obj']
                 
-                # 🛠️ FIXED: Mirroring active open positions from Master directly to Slaves without re-triggering master order
                 open_positions = []
                 try:
                     pos_res = master_obj.position()
@@ -449,7 +448,7 @@ with tab2:
                                 }
                                 res = slave["obj"].placeOrder(slave_order_params)
                                 
-                                if res and isinstance(res, dict) and (res.get('status'] == True or 'data' in res):
+                                if res and isinstance(res, dict) and (res.get('status') == True or 'data' in res):
                                     order_id = res.get('data', {}).get('orderid', 'PLACED')
                                     log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
                                     return (True, slave['id'], order_id)
