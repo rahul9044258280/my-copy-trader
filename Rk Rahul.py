@@ -151,15 +151,13 @@ def log_trade(account_type, client_id, symbol, action, qty, status, order_id):
 def background_heartbeat_monitor():
     while True:
         try:
-            time.sleep(60) # Run every 60 seconds
+            time.sleep(60)
             if 'master_objs_bulk' in st.session_state and 'slave_objs_bulk' in st.session_state:
                 all_active = st.session_state['master_objs_bulk'] + st.session_state['slave_objs_bulk']
                 for acc in all_active:
                     try:
-                        # Lightweight call to verify session health
                         acc['obj'].rmsLimit()
                     except Exception:
-                        # Attempt auto-reconnect using database credentials
                         try:
                             if db_conn:
                                 cur = db_conn.cursor()
@@ -177,7 +175,6 @@ def background_heartbeat_monitor():
         except Exception:
             pass
 
-# Start background monitor thread once safely
 if 'heartbeat_started' not in st.session_state:
     st.session_state['heartbeat_started'] = True
     hb_thread = threading.Thread(target=background_heartbeat_monitor, daemon=True)
@@ -417,8 +414,15 @@ with tab2:
                 def place_master_order(master):
                     try:
                         res = master["obj"].placeOrder(master_order_params)
-                        log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", res)
-                        return (True, master['id'], res)
+                        # Strict Validation for SmartAPI Order Response
+                        if res and (isinstance(res, str) or res.get('status') == True or 'data' in res):
+                            order_id = res.get('data', {}).get('orderid', str(res)) if isinstance(res, dict) else str(res)
+                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "SUCCESS", order_id)
+                            return (True, master['id'], order_id)
+                        else:
+                            err_msg = str(res)
+                            log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", err_msg)
+                            return (False, master['id'], err_msg)
                     except Exception as e:
                         log_trade("Master", master['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
                         return (False, master['id'], str(e))
@@ -441,11 +445,18 @@ with tab2:
                                 "squareoff": "0", "stoploss": "0", "quantity": str(final_qty)
                             }
                             res = slave["obj"].placeOrder(slave_order_params)
-                            log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", res)
-                            return (True, slave['id'], res)
+                            if res and (isinstance(res, str) or res.get('status') == True or 'data' in res):
+                                order_id = res.get('data', {}).get('orderid', str(res)) if isinstance(res, dict) else str(res)
+                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "SUCCESS", order_id)
+                                return (True, slave['id'], order_id)
+                            else:
+                                err_msg = str(res)
+                                log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", final_qty, "FAILED", err_msg)
+                                return (False, slave['id'], err_msg)
                     except Exception as e:
                         log_trade("Slave", slave['id'], "SBIN-EQ", "BUY", base_qty, "FAILED", str(e))
-                    return (False, slave['id'], "Skipped (Inactive or Error)")
+                        return (False, slave['id'], str(e))
+                    return (False, slave['id'], "Skipped (Inactive)")
 
                 status_container = st.empty()
                 status_container.text("⚡ Ultra-Fast Execution Started! Broadcasting orders concurrently...")
@@ -483,7 +494,7 @@ with tab2:
                             failed_slaves += 1
 
                 status_container.empty()
-                st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Skipped/Failed Slaves: {failed_slaves}")
+                st.success(f"⚡ Ultra-Fast Copy Trade Executed! Successful Slaves: {success_slaves} | Failed/Skipped Slaves: {failed_slaves}")
             else:
                 st.warning("Pehle Tab 1 से accounts connect/auto-login karein!")
 
@@ -523,8 +534,9 @@ with tab2:
                                     "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
-                                acc['obj'].placeOrder(sq_params)
-                                log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", "EXIT")
+                                res = acc['obj'].placeOrder(sq_params)
+                                order_id = res.get('data', {}).get('orderid', 'EXIT') if isinstance(res, dict) else 'EXIT'
+                                log_trade(acc['type'], acc['id'], symbol_name, f"SQUARE_OFF_{tx_type}", qty_to_close, "KILL_SWITCH", order_id)
                                 exits_placed += 1
                         return (True, acc['id'], exits_placed)
                 except Exception as e:
