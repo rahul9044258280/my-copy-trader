@@ -413,12 +413,19 @@ with tab2:
                         for p in pos_res['data']:
                             netq = int(p.get('netqty', 0))
                             if netq != 0:
+                                sym = p.get('tradingsymbol', '')
+                                # 🛠️ Robust Exchange Auto-Detection (NFO for Options/Futures, NSE for Equities)
+                                if "PE" in sym.upper() or "CE" in sym.upper() or "FUT" in sym.upper() or ("NIFTY" in sym.upper() and not sym.upper().endswith("-EQ")):
+                                    correct_exchange = "NFO"
+                                else:
+                                    correct_exchange = p.get('exchange', 'NSE')
+
                                 open_positions.append({
-                                    "tradingsymbol": p.get('tradingsymbol'),
+                                    "tradingsymbol": sym,
                                     "symboltoken": p.get('symboltoken'),
                                     "qty": abs(netq),
                                     "transactiontype": "BUY" if netq > 0 else "SELL",
-                                    "exchange": p.get('exchange', 'NSE'),
+                                    "exchange": correct_exchange,
                                     "producttype": p.get('producttype', 'DELIVERY')
                                 })
                 except Exception as e:
@@ -453,6 +460,7 @@ with tab2:
                                     log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, "SUCCESS", order_id)
                                     return (True, slave['id'], order_id)
                                 else:
+                                    # Detailed error extraction
                                     err_msg = res.get('message', str(res)) if isinstance(res, dict) else str(res)
                                     log_trade("Slave", slave['id'], pos['tradingsymbol'], pos['transactiontype'], final_qty, f"FAIL: {err_msg}", "None")
                                     return (False, slave['id'], err_msg)
@@ -482,6 +490,7 @@ with tab2:
                                     st.success(f"Slave ({s_id}) Position Mirrored Successfully!")
                                 else:
                                     failed_slaves += 1
+                                    st.error(f"Slave ({s_id}) Error: {s_msg}")
                             except Exception:
                                 failed_slaves += 1
 
@@ -516,13 +525,17 @@ with tab2:
                             if netqty != 0:
                                 tx_type = "SELL" if netqty > 0 else "BUY"
                                 qty_to_close = abs(netqty)
-                                symbol_name = pos.get('tradingsymbol')
+                                symbol_name = pos.get('tradingsymbol', '')
                                 token = pos.get('symboltoken')
-                                exchange = pos.get('exchange', 'NSE')
+                                
+                                if "PE" in symbol_name.upper() or "CE" in symbol_name.upper() or "FUT" in symbol_name.upper():
+                                    sq_exchange = "NFO"
+                                else:
+                                    sq_exchange = pos.get('exchange', 'NSE')
                                 
                                 sq_params = {
                                     "variety": "NORMAL", "tradingsymbol": symbol_name, "symboltoken": token,
-                                    "transactiontype": tx_type, "exchange": exchange, "ordertype": "MARKET",
+                                    "transactiontype": tx_type, "exchange": sq_exchange, "ordertype": "MARKET",
                                     "producttype": pos.get('producttype', 'DELIVERY'), "duration": "DAY", 
                                     "price": "0", "squareoff": "0", "stoploss": "0", "quantity": str(qty_to_close)
                                 }
